@@ -12,7 +12,7 @@ sysctl net.ipv6.ip_nonlocal_bind=1
 ```
 
 ```bash
-    go run . --port <port> --cidr < your ipv6 cidr >  # e.g. 2001:399:8205:ae00::/64
+    go run ./go-proxy-ipv6-pool --port <port> --prefix < your ipv6 cidr prefix length >  # e.g. 2001:399:8205:ae00::/64
 ```
 
 ### Use as a proxy server
