@@ -13,17 +13,25 @@ import (
 	"os/exec"
 	"sync"
 	"time"
+
+	"github.com/joho/godotenv"
 )
 
 var port int
 var prefixLen int
 var cidr = ""
+var net_if = ""
 
 func main() {
 	flag.IntVar(&prefixLen, "prefix", 60, "ipv6 prefix length")
 	flag.IntVar(&port, "port", 3128, "server port")
 	flag.Parse()
 
+	err := godotenv.Load()
+	if err != nil {
+		log.Fatal("Error loading .env file")
+	}
+	net_if = os.Getenv("NET_IF")
 	httpPort := port
 	socks5Port := port + 1
 
@@ -70,11 +78,13 @@ func changeNdppdConfig() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer file.Close() // 重要：关闭文件
+	defer func(file *os.File) {
+		_ = file.Close()
+	}(file) // 重要：关闭文件
 	// 使用 io.WriteString 写入字符串
 	_, err = io.WriteString(file, fmt.Sprintf(`
 route-ttl 30000
-proxy eth0 {
+proxy %s {
     router no
     timeout 10000
     ttl 30000
@@ -82,7 +92,7 @@ proxy eth0 {
         static
     }
 }
-`, cidr),
+`, net_if, cidr),
 	)
 	execCmd("service ndppd restart")
 	execCmd(fmt.Sprintf("ip route add local %s dev eth0", cidr))
