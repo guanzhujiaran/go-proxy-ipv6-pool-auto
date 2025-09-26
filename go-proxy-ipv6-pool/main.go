@@ -66,12 +66,16 @@ func main() {
 
 }
 func execCmd(cmd string) {
-	stdout := exec.Command(cmd)
-	output, err := stdout.CombinedOutput() // 合并 stdout + stderr
+	log.Printf("执行命令: %s", cmd)
+	c := exec.Command("/bin/sh", "-c", cmd)
+	output, err := c.CombinedOutput()
 	if err != nil {
-		log.Printf("命令执行失败: %v\n", err)
+		log.Printf("命令执行失败: %v\n输出: %s", err, string(output))
+		return
 	}
-	log.Printf(string(output))
+	if len(output) > 0 {
+		log.Printf("命令输出: %s", string(output))
+	}
 }
 func changeNdppdConfig() {
 	file, err := os.Create("/etc/ndppd.conf")
@@ -95,7 +99,7 @@ proxy %s {
 `, net_if, cidr),
 	)
 	execCmd("service ndppd restart")
-	execCmd(fmt.Sprintf("ip route add local %s dev eth0", cidr))
+	execCmd(fmt.Sprintf("ip route add local %s dev %s", cidr, net_if))
 
 }
 
