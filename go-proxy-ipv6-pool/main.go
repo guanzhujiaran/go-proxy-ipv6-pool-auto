@@ -32,8 +32,8 @@ func main() {
 	}
 
 	net_if = os.Getenv("NET_IF")
-	execCmd("sysctl net.ipv6.ip_nonlocal_bind=1")
-	execCmd(fmt.Sprintf("sysctl -w net.ipv6.conf.%s.accept_dad=0", net_if))
+	execCmd("sudo sysctl net.ipv6.ip_nonlocal_bind=1")
+	execCmd(fmt.Sprintf("sudo sysctl -w net.ipv6.conf.%s.accept_dad=0", net_if))
 
 	httpPort := port
 	socks5Port := port + 1
@@ -70,7 +70,7 @@ func main() {
 }
 func execCmd(cmd string) {
 	log.Printf("执行命令: %s", cmd)
-	c := exec.Command("/bin/sh", "-c", cmd)
+	c := exec.Command(cmd)
 	output, err := c.CombinedOutput()
 	if err != nil {
 		log.Printf("命令执行失败: %v\n输出: %s", err, string(output))
@@ -104,11 +104,9 @@ proxy %s {
 `, net_if, cidr),
 		)
 	}()
-
-	execCmd("service ndppd restart")
-	execCmd(fmt.Sprintf("ip route del local %s dev %s", cidr, net_if))
-	execCmd(fmt.Sprintf("ip route add local %s dev %s", cidr, net_if))
-
+	execCmd("sudo service ndppd restart")
+	execCmd(fmt.Sprintf("sudo ip route del local %s dev %s", cidr, net_if))
+	execCmd(fmt.Sprintf("sudo ip route add local %s dev %s", cidr, net_if))
 }
 
 func ipv6Monitor() {
