@@ -77,16 +77,18 @@ func execCmd(cmd string) {
 		log.Printf("命令输出: %s", string(output))
 	}
 }
-func changeNdppdConfig() {
-	file, err := os.Create("/etc/ndppd.conf")
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer func(file *os.File) {
-		_ = file.Close()
-	}(file) // 重要：关闭文件
-	// 使用 io.WriteString 写入字符串
-	_, err = io.WriteString(file, fmt.Sprintf(`
+
+func changeNdppdConfig(cidr string) {
+	func() {
+		file, err := os.Create("/etc/ndppd.conf")
+		if err != nil {
+			log.Fatal(err)
+		}
+		defer func(file *os.File) {
+			_ = file.Close()
+		}(file) // 重要：关闭文件
+		// 使用 io.WriteString 写入字符串
+		_, err = io.WriteString(file, fmt.Sprintf(`
 route-ttl 30000
 proxy %s {
     router no
@@ -97,7 +99,9 @@ proxy %s {
     }
 }
 `, net_if, cidr),
-	)
+		)
+	}()
+
 	execCmd("service ndppd restart")
 	execCmd(fmt.Sprintf("ip route del local %s dev %s", cidr, net_if))
 	execCmd(fmt.Sprintf("ip route add local %s dev %s", cidr, net_if))
@@ -129,7 +133,7 @@ func ipv6Monitor() {
 				if prefixStr != originPrefix {
 					cidr = prefix.String()
 					log.Printf("获取到网卡ipv6地址变动 cidr:[%s]", cidr)
-					changeNdppdConfig()
+					changeNdppdConfig(cidr)
 					originPrefix = prefixStr
 				}
 			}
