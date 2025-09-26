@@ -93,7 +93,7 @@ proxy %s {
     timeout 10000
     ttl 30000
     rule %s {
-        static
+        auto
     }
 }
 `, net_if, cidr),
