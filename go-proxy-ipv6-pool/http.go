@@ -72,6 +72,7 @@ func init() {
 			}
 			outgoingIP = "[" + outgoingIP + "]"
 			// 使用指定的出口 IP 地址创建连接
+			log.Printf("HTTPS (CONNECT) 出站使用 IPv6: %s", outgoingIP) // 调试日志
 			localAddr, err := net.ResolveTCPAddr("tcp", outgoingIP+":0")
 			if err != nil {
 				log.Printf("[http] Resolve local address error: %v", err)

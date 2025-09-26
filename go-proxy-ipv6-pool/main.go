@@ -26,7 +26,7 @@ func main() {
 	flag.IntVar(&prefixLen, "prefix", 60, "ipv6 prefix length")
 	flag.IntVar(&port, "port", 3128, "server port")
 	flag.Parse()
-
+	execCmd("sysctl net.ipv6.ip_nonlocal_bind=1")
 	err := godotenv.Load()
 	if err != nil {
 		log.Fatal("Error loading .env file")
