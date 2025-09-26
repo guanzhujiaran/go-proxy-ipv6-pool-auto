@@ -99,41 +99,38 @@ proxy %s {
 `, net_if, cidr),
 	)
 	execCmd("service ndppd restart")
+	execCmd(fmt.Sprintf("ip route del local %s dev %s", cidr, net_if))
 	execCmd(fmt.Sprintf("ip route add local %s dev %s", cidr, net_if))
 
 }
 
 func ipv6Monitor() {
-	origin_prefix := "" // 初始的ip前缀
+	originPrefix := "" // 初始的ip前缀
 
 	for true {
-		interfaces, err := net.Interfaces()
+		interFace, err := net.InterfaceByName(net_if)
 		if err != nil {
 			log.Println("获取网络接口失败:", err)
 			continue
 		}
+		addrs, err := interFace.Addrs()
+		if err != nil {
+			continue
+		}
 
-		for _, iface := range interfaces {
-			addrs, err := iface.Addrs()
-			if err != nil {
+		for _, addr := range addrs {
+			ipNet, ok := addr.(*net.IPNet)
+			if !ok || ipNet.IP.To4() != nil {
 				continue
 			}
-
-			for _, addr := range addrs {
-				ipNet, ok := addr.(*net.IPNet)
-				if !ok || ipNet.IP.To4() != nil {
-					continue
-				}
-				if ipNet.IP.To16() != nil && ipNet.IP.IsGlobalUnicast() {
-					prefix, _ := netip.AddrFrom16([16]byte(ipNet.IP.To16())).Prefix(prefixLen)
-					prefixStr := prefix.String()
-					if prefixStr != origin_prefix {
-						cidr = prefix.String()
-						log.Printf("获取到网卡ipv6地址变动 cidr:[%s]", cidr)
-						changeNdppdConfig()
-						origin_prefix = prefixStr
-
-					}
+			if ipNet.IP.To16() != nil && ipNet.IP.IsGlobalUnicast() {
+				prefix, _ := netip.AddrFrom16([16]byte(ipNet.IP.To16())).Prefix(prefixLen)
+				prefixStr := prefix.String()
+				if prefixStr != originPrefix {
+					cidr = prefix.String()
+					log.Printf("获取到网卡ipv6地址变动 cidr:[%s]", cidr)
+					changeNdppdConfig()
+					originPrefix = prefixStr
 				}
 			}
 		}
