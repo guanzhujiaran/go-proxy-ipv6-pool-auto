@@ -26,12 +26,15 @@ func main() {
 	flag.IntVar(&prefixLen, "prefix", 60, "ipv6 prefix length")
 	flag.IntVar(&port, "port", 3128, "server port")
 	flag.Parse()
-	execCmd("sysctl net.ipv6.ip_nonlocal_bind=1")
 	err := godotenv.Load()
 	if err != nil {
 		log.Fatal("Error loading .env file")
 	}
+
 	net_if = os.Getenv("NET_IF")
+	execCmd("sysctl net.ipv6.ip_nonlocal_bind=1")
+	execCmd(fmt.Sprintf("sysctl -w net.ipv6.conf.%s.accept_dad=0", net_if))
+
 	httpPort := port
 	socks5Port := port + 1
 
@@ -115,10 +118,12 @@ func ipv6Monitor() {
 		interFace, err := net.InterfaceByName(net_if)
 		if err != nil {
 			log.Println("获取网络接口失败:", err)
+			time.Sleep(60 * time.Second)
 			continue
 		}
 		addrs, err := interFace.Addrs()
 		if err != nil {
+			time.Sleep(60 * time.Second)
 			continue
 		}
 
