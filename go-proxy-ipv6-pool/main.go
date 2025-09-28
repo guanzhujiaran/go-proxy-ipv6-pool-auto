@@ -148,13 +148,13 @@ func ipv6Monitor() {
 
 func generateRandomIPv6(cidr string) (string, error) {
 	// 解析CIDR
-	prefix, err := netip.ParsePrefix(cidr)
+	_, ipv6Net, err := net.ParseCIDR(cidr)
 	if err != nil {
 		return "", err
 	}
 
 	// 获取网络部分和掩码长度
-	maskSize := prefix.Bits()
+	maskSize, _ := ipv6Net.Mask.Size()
 
 	// 计算随机部分的长度
 	randomPartLength := 128 - maskSize
@@ -167,15 +167,12 @@ func generateRandomIPv6(cidr string) (string, error) {
 	}
 
 	// 获取网络部分
-	networkPart := prefix.Addr().As16()
+	networkPart := ipv6Net.IP.To16()
 
 	// 合并网络部分和随机部分
 	for i := 0; i < len(randomPart); i++ {
 		networkPart[16-len(randomPart)+i] = randomPart[i]
 	}
 
-	// 转换为netip.Addr并返回字符串
-	ip := netip.AddrFrom16(networkPart)
-
-	return ip.String(), nil
+	return networkPart.String(), nil
 }
