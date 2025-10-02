@@ -105,8 +105,7 @@ proxy %s {
 		)
 	}()
 	execCmd("service", "ndppd", "restart")
-	execCmd("ip", "route", "del", "local", cidr, "dev", "lo")
-	execCmd("ip", "route", "add", "local", cidr, "dev", "lo")
+	execCmd("ip", "route", "replace", "local", cidr, "dev", net_if)
 }
 
 func ipv6Monitor() {
