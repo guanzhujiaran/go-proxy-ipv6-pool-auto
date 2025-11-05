@@ -24,13 +24,12 @@ var netIf = ""
 func main() {
 	flag.IntVar(&prefixLen, "prefix", 60, "ipv6 prefix length")
 	flag.IntVar(&port, "port", 3128, "server port")
-	flag.StringVar(&netIf, "net_if", "eth0", "net interface")
 	flag.Parse()
 	err := godotenv.Load()
 	if err != nil {
 		log.Fatal("Error loading .env file")
 	}
-
+	netIf = os.Getenv("NET_IF")
 	httpPort := port
 	socks5Port := port + 1
 
