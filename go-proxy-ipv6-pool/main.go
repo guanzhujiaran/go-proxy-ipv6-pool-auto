@@ -8,7 +8,6 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"net/netip"
 	"os"
 	"os/exec"
 	"sync"
@@ -20,20 +19,17 @@ import (
 var port int
 var prefixLen int
 var cidr = ""
-var net_if = ""
+var netIf = ""
 
 func main() {
 	flag.IntVar(&prefixLen, "prefix", 60, "ipv6 prefix length")
 	flag.IntVar(&port, "port", 3128, "server port")
+	flag.StringVar(&netIf, "net_if", "eth0", "net interface")
 	flag.Parse()
 	err := godotenv.Load()
 	if err != nil {
 		log.Fatal("Error loading .env file")
 	}
-
-	net_if = os.Getenv("NET_IF")
-	execCmd("sysctl", "net.ipv6.ip_nonlocal_bind=1")
-	execCmd("sysctl", "-w", fmt.Sprintf("net.ipv6.conf.%s.accept_dad=0", net_if))
 
 	httpPort := port
 	socks5Port := port + 1
@@ -64,7 +60,6 @@ func main() {
 	log.Println("server running ...")
 	log.Printf("http running on 0.0.0.0:%d", httpPort)
 	log.Printf("socks5 running on 0.0.0.0:%d", socks5Port)
-	log.Printf("ipv6 cidr:[%s]", cidr)
 	wg.Wait()
 
 }
@@ -73,7 +68,7 @@ func execCmd(name string, arg ...string) {
 	c := exec.Command(name, arg...)
 	output, err := c.CombinedOutput()
 	if err != nil {
-		log.Printf("命令执行失败: %v\n输出: %s", err, string(output))
+		log.Printf("命令执行失败: %v 输出: %s", err, string(output))
 		return
 	}
 	if len(output) > 0 {
@@ -81,17 +76,28 @@ func execCmd(name string, arg ...string) {
 	}
 }
 
-func changeNdppdConfig(cidr string) {
-	func() {
-		file, err := os.Create("/etc/ndppd.conf")
-		if err != nil {
-			log.Fatal(err)
-		}
-		defer func(file *os.File) {
-			_ = file.Close()
-		}(file) // 重要：关闭文件
-		// 使用 io.WriteString 写入字符串
-		_, err = io.WriteString(file, fmt.Sprintf(`
+func changeNdppdConfig() {
+	log.Printf("变更 ndppd 配置文件：%s", cidr)
+
+	_, ipv6Net, err := net.ParseCIDR(cidr)
+	if err != nil {
+		log.Printf("无法解析 CIDR %s: %v", cidr, err)
+		return
+	}
+
+	// 强制转为 /64 网络
+	_, net64, _ := net.ParseCIDR(ipv6Net.IP.String() + "/64")
+	ip64 := net64.IP.To16()
+
+	// 构造 ::1 地址
+	ip64[15] = 1 // 最后一个字节设为 1
+	localAddr := net.IP(ip64).String() + "/64"
+
+	log.Printf("添加本地地址: %s", localAddr)
+	execCmd("ip", "addr", "add", localAddr, "dev", netIf)
+
+	// 写 ndppd 配置
+	confContent := fmt.Sprintf(`
 route-ttl 30000
 proxy %s {
     router no
@@ -101,48 +107,128 @@ proxy %s {
         static
     }
 }
-`, net_if, cidr),
-		)
-	}()
+`, netIf, cidr)
+
+	if err := os.WriteFile("/etc/ndppd.conf", []byte(confContent), 0644); err != nil {
+		log.Printf("写入 ndppd.conf 失败: %v", err)
+		return
+	}
+
 	execCmd("service", "ndppd", "restart")
-	execCmd("ip", "route", "replace", "local", cidr, "dev", net_if)
+	// 可选：省略 sysctl，让 ndppd 自动处理 proxy_ndp
 }
+func getLocalIPv6() (string, error) {
+	log.Println("尝试从本地网卡获取 IPv6 地址...")
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		log.Printf("获取网卡列表失败: %v", err)
+		return getIPv6FromService()
+	}
 
-func ipv6Monitor() {
-	originPrefix := "" // 初始的ip前缀
-
-	for true {
-		interFace, err := net.InterfaceByName(net_if)
+	for _, iface := range ifaces {
+		addrs, err := iface.Addrs()
 		if err != nil {
-			log.Println("获取网络接口失败:", err)
-			time.Sleep(60 * time.Second)
-			continue
-		}
-		addrs, err := interFace.Addrs()
-		if err != nil {
-			time.Sleep(60 * time.Second)
+			log.Printf("获取网卡 %s 地址失败: %v", iface.Name, err)
 			continue
 		}
 
 		for _, addr := range addrs {
-			ipNet, ok := addr.(*net.IPNet)
-			if !ok || ipNet.IP.To4() != nil {
+			ip, _, err := net.ParseCIDR(addr.String())
+			if err != nil {
 				continue
 			}
-			if ipNet.IP.To16() != nil && ipNet.IP.IsGlobalUnicast() {
-				prefix, _ := netip.AddrFrom16([16]byte(ipNet.IP.To16())).Prefix(prefixLen)
-				prefixStr := prefix.String()
-				if prefixStr != originPrefix {
-					cidr = prefix.String()
-					log.Printf("获取到网卡ipv6地址变动 cidr:[%s]", cidr)
-					changeNdppdConfig(cidr)
-					originPrefix = prefixStr
-				}
+
+			if ip.To4() == nil && ip.IsGlobalUnicast() {
+				log.Printf("从网卡 %s 获取到 IPv6 地址: %s", iface.Name, ip.String())
+				return ip.String() + fmt.Sprintf("/%d", prefixLen), nil
 			}
 		}
-
-		time.Sleep(60 * time.Second)
 	}
+
+	log.Println("本地网卡未找到公网 IPv6 地址，尝试从外部服务获取...")
+	return getIPv6FromService()
+}
+
+func ipv6Monitor() {
+	prevCidr := "" // 初始的ip前缀
+
+	for {
+		currentCidr, err := getLocalIPv6()
+		if err != nil {
+			log.Println("获取 IPv6 地址失败:", err)
+			time.Sleep(600 * time.Second)
+			continue
+		}
+
+		log.Printf("当前获取到的 IPv6 地址: %s", currentCidr)
+		if currentCidr != prevCidr {
+			cidr = currentCidr
+			log.Printf("获取到 IPv6 地址变动 currentCidr:[%s]", currentCidr)
+			changeNdppdConfig()
+			prevCidr = currentCidr
+		}
+
+		time.Sleep(600 * time.Second)
+	}
+}
+
+func getIPv6FromService() (string, error) {
+	log.Println("正在通过外部服务 6.ipw.cn 获取 IPv6 地址...")
+
+	client := &http.Client{
+		Timeout: 10 * time.Second,
+	}
+
+	var resp *http.Response
+	var err error
+	maxRetries := 3
+
+	for i := 0; i < maxRetries; i++ {
+		resp, err = client.Get("http://6.ipw.cn")
+		if err == nil {
+			break
+		}
+		log.Printf("请求 6.ipw.cn 失败 (尝试 %d/%d): %v", i+1, maxRetries, err)
+		time.Sleep(2 * time.Second)
+	}
+
+	if err != nil {
+		log.Printf("请求 6.ipw.cn 最终失败: %v", err)
+		return "", fmt.Errorf("请求 6.ipw.cn 失败: %v", err)
+	}
+
+	defer func(Body io.ReadCloser) {
+		err := Body.Close()
+		if err != nil {
+			log.Printf("关闭响应体失败: %v", err)
+		}
+	}(resp.Body)
+
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("6.ipw.cn 返回状态码: %d", resp.StatusCode)
+		return "", fmt.Errorf("6.ipw.cn 返回状态码: %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		log.Printf("读取响应失败: %v", err)
+		return "", fmt.Errorf("读取响应失败: %v", err)
+	}
+
+	ipv6 := string(body)
+	if net.ParseIP(ipv6) == nil {
+		log.Printf("无效的 IPv6 地址: %s", ipv6)
+		return "", fmt.Errorf("无效的 IPv6 地址: %s", ipv6)
+	}
+
+	result := ipv6 + fmt.Sprintf("/%d", prefixLen)
+	if result == "" {
+		log.Println("从外部服务获取到的 IPv6 地址为空")
+		return "", fmt.Errorf("从外部服务获取到的 IPv6 地址为空")
+	}
+
+	log.Printf("从外部服务获取到 IPv6 地址: %s", result)
+	return result, nil
 }
 
 func generateRandomIPv6(cidr string) (string, error) {
