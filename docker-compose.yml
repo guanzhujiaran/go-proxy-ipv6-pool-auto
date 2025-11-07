@@ -1,0 +1,18 @@
+services:
+  go-proxy-server:
+    container_name: go-proxy-server
+    build: .
+    ports:
+      - "3128:3128"
+    networks:
+      - my-network
+    environment:
+      - NET_IF=eth0
+
+networks:
+  my-network:
+    enable_ipv6: true
+    driver: bridge
+    ipam:
+      config:
+        - subnet: "2409:8a1e:2e90:d20::/64"
