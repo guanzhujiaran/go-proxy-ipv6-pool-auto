@@ -12,7 +12,11 @@ import (
 var httpProxy = goproxy.NewProxyHttpServer()
 
 func init() {
-	httpProxy.Verbose = true
+    if runEnv =="dev" {
+        httpProxy.Verbose = true
+    } else{
+        httpProxy.Verbose = false
+    }
 
 	httpProxy.OnRequest().DoFunc(
 		func(req *http.Request, ctx *goproxy.ProxyCtx) (*http.Request, *http.Response) {
