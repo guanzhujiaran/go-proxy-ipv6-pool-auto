@@ -3,7 +3,7 @@
 Random ipv6 egress proxy server (support http/socks5) 
 
 The extension of [XiaoMiku01/go-proxy-ipv6-pool](https://github.com/XiaoMiku01/go-proxy-ipv6-pool)
-
+暂时勉强能用，正在解决docker cidr无法绑定到网卡的问题，先用起来再说
 ## Usage
 
 ```bash

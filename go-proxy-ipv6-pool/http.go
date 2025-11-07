@@ -25,6 +25,7 @@ func init() {
 			outgoingIP = "[" + outgoingIP + "]"
 			// 使用指定的出口 IP 地址创建连接
 			localAddr, err := net.ResolveTCPAddr("tcp", outgoingIP+":0")
+			log.Printf("[http] outgoingIp: %s", outgoingIP)
 			if err != nil {
 				log.Printf("[http] Resolve local address error: %v", err)
 				return req, nil

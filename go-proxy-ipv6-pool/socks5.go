@@ -37,7 +37,8 @@ func init() {
 			}
 			// 通过代理服务器建立到目标服务器的连接
 
-			log.Println("[socks5]",addr, "via", outgoingIP)
+			// if runEnv == "dev" {
+			log.Println("[socks5]", addr, "via", outgoingIP)
 			return dialer.DialContext(ctx, network, addr)
 		},
 	}
