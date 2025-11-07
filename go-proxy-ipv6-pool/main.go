@@ -29,7 +29,7 @@ func main() {
 	flag.IntVar(&prefixLen, "prefix", 64, "ipv6 prefix length")
 	flag.IntVar(&port, "port", 3128, "server port")
 	flag.Parse()
-	err := godotenv.Load(".env.dev", ".env")
+	err := godotenv.Load(".env")
 	if err != nil {
 		log.Fatal("Error loading .env file")
 	}
