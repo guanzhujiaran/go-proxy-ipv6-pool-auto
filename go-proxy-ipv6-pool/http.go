@@ -12,25 +12,28 @@ import (
 var httpProxy = goproxy.NewProxyHttpServer()
 
 func init() {
-    if runEnv =="dev" {
-        httpProxy.Verbose = true
-    } else{
-        httpProxy.Verbose = false
-    }
+	if runEnv == "dev" {
+		httpProxy.Verbose = true
+	} else {
+		httpProxy.Verbose = false
+	}
 
 	httpProxy.OnRequest().DoFunc(
 		func(req *http.Request, ctx *goproxy.ProxyCtx) (*http.Request, *http.Response) {
 			// 为 IPv6 地址添加方括号
 			outgoingIP, err := generateRandomIPv6(cidr)
-			if err != nil {
+			if err != nil && runEnv == "dev" {
 				log.Printf("Generate random IPv6 error: %v", err)
 				return req, nil
 			}
 			outgoingIP = "[" + outgoingIP + "]"
 			// 使用指定的出口 IP 地址创建连接
 			localAddr, err := net.ResolveTCPAddr("tcp", outgoingIP+":0")
-			log.Printf("[http] outgoingIp: %s", outgoingIP)
-			if err != nil {
+			if runEnv == "dev" {
+				log.Printf("[http] outgoingIp: %s", outgoingIP)
+
+			}
+			if err != nil && runEnv == "dev" {
 				log.Printf("[http] Resolve local address error: %v", err)
 				return req, nil
 			}
@@ -44,7 +47,7 @@ func init() {
 			// 创建新的 HTTP 请求
 
 			newReq, err := http.NewRequest(req.Method, req.URL.String(), req.Body)
-			if err != nil {
+			if err != nil && runEnv == "dev" {
 				log.Printf("[http] New request error: %v", err)
 				return req, nil
 			}
