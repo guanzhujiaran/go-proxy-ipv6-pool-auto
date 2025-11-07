@@ -22,8 +22,10 @@ func init() {
 		func(req *http.Request, ctx *goproxy.ProxyCtx) (*http.Request, *http.Response) {
 			// 为 IPv6 地址添加方括号
 			outgoingIP, err := generateRandomIPv6(cidr)
-			if err != nil && runEnv == "dev" {
-				log.Printf("Generate random IPv6 error: %v", err)
+			if err != nil {
+				if runEnv == "dev" {
+					log.Printf("Generate random IPv6 error: %v", err)
+				}
 				return req, nil
 			}
 			outgoingIP = "[" + outgoingIP + "]"
@@ -31,10 +33,11 @@ func init() {
 			localAddr, err := net.ResolveTCPAddr("tcp", outgoingIP+":0")
 			if runEnv == "dev" {
 				log.Printf("[http] outgoingIp: %s", outgoingIP)
-
 			}
-			if err != nil && runEnv == "dev" {
-				log.Printf("[http] Resolve local address error: %v", err)
+			if err != nil {
+				if runEnv == "dev" {
+					log.Printf("[http] Resolve local address error: %v", err)
+				}
 				return req, nil
 			}
 			dialer := net.Dialer{
@@ -47,8 +50,10 @@ func init() {
 			// 创建新的 HTTP 请求
 
 			newReq, err := http.NewRequest(req.Method, req.URL.String(), req.Body)
-			if err != nil && runEnv == "dev" {
-				log.Printf("[http] New request error: %v", err)
+			if err != nil {
+				if runEnv == "dev" {
+					log.Printf("[http] New request error: %v", err)
+				}
 				return req, nil
 			}
 			newReq.Header = req.Header
@@ -63,7 +68,9 @@ func init() {
 			// 发送 HTTP 请求
 			resp, err := client.Do(newReq)
 			if err != nil {
-				log.Printf("[http] Send request error: %v", err)
+				if runEnv == "dev" {
+					log.Printf("[http] Send request error: %v", err)
+				}
 				return req, nil
 			}
 			return req, resp
@@ -75,14 +82,18 @@ func init() {
 			// 通过代理服务器建立到目标服务器的连接
 			outgoingIP, err := generateRandomIPv6(cidr)
 			if err != nil {
-				log.Printf("Generate random IPv6 error: %v", err)
+				if runEnv == "dev" {
+					log.Printf("Generate random IPv6 error: %v", err)
+				}
 				return
 			}
 			outgoingIP = "[" + outgoingIP + "]"
 			// 使用指定的出口 IP 地址创建连接
 			localAddr, err := net.ResolveTCPAddr("tcp", outgoingIP+":0")
 			if err != nil {
-				log.Printf("[http] Resolve local address error: %v", err)
+				if runEnv == "dev" {
+					log.Printf("[http] Resolve local address error: %v", err)
+				}
 				return
 			}
 			dialer := net.Dialer{
@@ -92,7 +103,9 @@ func init() {
 			// 通过代理服务器建立到目标服务器的连接
 			server, err := dialer.Dial("tcp", req.URL.Host)
 			if err != nil {
-				log.Printf("[http] Dial to %s error: %v", req.URL.Host, err)
+				if runEnv == "dev" {
+					log.Printf("[http] Dial to %s error: %v", req.URL.Host, err)
+				}
 				client.Write([]byte("HTTP/1.1 500 Internal Server Error\r\n\r\n"))
 				client.Close()
 				return
