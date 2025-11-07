@@ -9,6 +9,9 @@ WORKDIR /app
 
 # 复制 go.mod 和 go.sum 文件并下载依赖
 COPY ./go-proxy-ipv6-pool/go.mod ./go-proxy-ipv6-pool/go.sum ./
+RUN go env -w GO111MODULE=on
+RUN go env -w GOPROXY=https://goproxy.cn,direct # 设置 Go 模块代理
+
 RUN go mod download
 RUN apt-get install -y vim net-tools sudo
 # 复制项目文件
