@@ -9,6 +9,8 @@ import (
 	"github.com/elazarl/goproxy"
 )
 
+var httpProxy = goproxy.NewProxyHttpServer()
+
 func init() {
 	if runEnv == "dev" {
 		httpProxy.Verbose = true

@@ -4,60 +4,37 @@ import (
 	"crypto/rand"
 	"flag"
 	"fmt"
+	"github.com/joho/godotenv"
 	"log"
 	"net"
 	"net/http"
 	"os"
 	"os/exec"
 	"sync"
-
-	"github.com/elazarl/goproxy"
-	"github.com/joho/godotenv"
 )
 
-var (
-	port      int
-	prefixLen int
-	cidr      string // 来自 .env 或自动探测
-	netIf     string
-	runEnv    string
+var port int
+var prefixLen int
+var cidr = ""
+var ipv6Addr = ""
+var netIf = ""
 
-	httpProxy = goproxy.NewProxyHttpServer()
-)
+// runEnv 表示运行环境，可选值为 "prod" 或 "dev"
+var runEnv string
 
 func main() {
-	flag.IntVar(&prefixLen, "prefix", 64, "IPv6 prefix length (e.g., 64)")
-	flag.IntVar(&port, "port", 3128, "HTTP proxy port")
+	flag.IntVar(&prefixLen, "prefix", 64, "ipv6 prefix length")
+	flag.IntVar(&port, "port", 3128, "server port")
 	flag.Parse()
-
-	if err := godotenv.Load(".env"); err != nil && !os.IsNotExist(err) {
-		log.Fatalf("Error loading .env file: %v", err)
+	err := godotenv.Load(".env")
+	if err != nil {
+		log.Fatal("Error loading .env file\n%v", err)
 	}
-
 	netIf = os.Getenv("NET_IF")
-	if netIf == "" {
-		log.Fatal("NET_IF not set in .env")
-	}
-
 	runEnv = os.Getenv("RUN_ENV")
-	if runEnv == "" {
-		runEnv = "prod"
-	}
-
-	// 优先从 .env 读取 CIDR，否则尝试自动获取
-	cidr = os.Getenv("CIDR")
-	if cidr == "" {
-		log.Println("CIDR not set in .env, attempting to detect...")
-		detected, err := getLocalIPv6()
-		if err != nil {
-			log.Fatalf("Failed to detect CIDR and none provided in .env: %v", err)
-		}
-		cidr = detected
-		log.Printf("Detected CIDR: %s", cidr)
-	}
-
 	httpPort := port
 	socks5Port := port + 1
+
 	if socks5Port > 65535 {
 		log.Fatal("port too large")
 	}
@@ -65,15 +42,15 @@ func main() {
 	var wg sync.WaitGroup
 	wg.Add(2)
 
-	// 启动 HTTP 代理
-	go func() {
-		defer wg.Done()
-		if err := http.ListenAndServe(fmt.Sprintf(":%d", httpPort), httpProxy); err != nil {
-			log.Fatalf("HTTP server failed: %v", err)
-		}
-	}()
+	go ipv6Monitor()
 
-	// 启动 SOCKS5 代理（需你自己实现 socks5Server）
+	go func() {
+		err := socks5Server.ListenAndServe("tcp", fmt.Sprintf("0.0.0.0:%d", socks5Port))
+		if err != nil {
+			log.Fatal("socks5 Server err:", err)
+		}
+
+	}()
 	go func() {
 		err := http.ListenAndServe(fmt.Sprintf("0.0.0.0:%d", httpPort), httpProxy)
 		if err != nil {

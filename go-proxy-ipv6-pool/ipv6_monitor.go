@@ -37,7 +37,6 @@ proxy %s {
 }
 
 func getLocalIPv6() (string, error) {
-	log.Println("尝试从本地网卡获取 IPv6 地址...")
 	ifaces, err := net.Interfaces()
 	if err != nil {
 		log.Printf("获取网卡列表失败: %v", err)
