@@ -9,56 +9,33 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
-	"strings"
 	"sync"
 
-	"github.com/elazarl/goproxy"
 	"github.com/joho/godotenv"
 )
 
-var (
-	port      int
-	prefixLen int
-	cidr      string // 来自 .env 或自动探测
-	netIf     string
-	runEnv    string
+var port int
+var prefixLen int
+var cidr = ""
+var ipv6Addr = ""
+var netIf = ""
 
-	httpProxy = goproxy.NewProxyHttpServer()
-)
+// runEnv 表示运行环境，可选值为 "prod" 或 "dev"
+var runEnv string
 
 func main() {
-	flag.IntVar(&prefixLen, "prefix", 64, "IPv6 prefix length (e.g., 64)")
-	flag.IntVar(&port, "port", 3128, "HTTP proxy port")
+	flag.IntVar(&prefixLen, "prefix", 64, "ipv6 prefix length")
+	flag.IntVar(&port, "port", 3128, "server port")
 	flag.Parse()
-
-	if err := godotenv.Load(".env"); err != nil && !os.IsNotExist(err) {
-		log.Fatalf("Error loading .env file: %v", err)
+	err := godotenv.Load(".env")
+	if err != nil {
+		log.Fatal("Error loading .env file\n%v", err)
 	}
-
 	netIf = os.Getenv("NET_IF")
-	if netIf == "" {
-		log.Fatal("NET_IF not set in .env")
-	}
-
 	runEnv = os.Getenv("RUN_ENV")
-	if runEnv == "" {
-		runEnv = "prod"
-	}
-
-	// 优先从 .env 读取 CIDR，否则尝试自动获取
-	cidr = os.Getenv("CIDR")
-	if cidr == "" {
-		log.Println("CIDR not set in .env, attempting to detect...")
-		detected, err := getLocalIPv6()
-		if err != nil {
-			log.Fatalf("Failed to detect CIDR and none provided in .env: %v", err)
-		}
-		cidr = detected
-		log.Printf("Detected CIDR: %s", cidr)
-	}
-
 	httpPort := port
 	socks5Port := port + 1
+
 	if socks5Port > 65535 {
 		log.Fatal("port too large")
 	}
@@ -66,114 +43,68 @@ func main() {
 	var wg sync.WaitGroup
 	wg.Add(2)
 
-	// 启动 HTTP 代理
+	go ipv6Monitor()
+
 	go func() {
-		defer wg.Done()
-		if err := http.ListenAndServe(fmt.Sprintf(":%d", httpPort), httpProxy); err != nil {
-			log.Fatalf("HTTP server failed: %v", err)
-		}
-	}()
-
-	// 启动 SOCKS5 代理（需你自己实现 socks5Server）
-	go func() {
-		defer wg.Done()
-		if err := socks5Server.ListenAndServe("tcp", fmt.Sprintf(":%d", socks5Port)); err != nil {
-			log.Fatalf("SOCKS5 server failed: %v", err)
-		}
-	}()
-
-	log.Println("Proxy server running...")
-	log.Printf("HTTP  proxy: http://0.0.0.0:%d", httpPort)
-	log.Printf("SOCKS5 proxy: socks5://0.0.0.0:%d", socks5Port)
-
-	wg.Wait()
-}
-
-// addIPv6ToInterface 幂等地将 IPv6/128 添加到接口
-func addIPv6ToInterface(ip, ifname string) error {
-	cmd := exec.Command("ip", "-6", "addr", "add", ip+"/128", "dev", ifname)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		if strings.Contains(string(out), "File exists") {
-			return nil // 已存在，忽略
-		}
-		return fmt.Errorf("failed to add IP %s: %w (output: %s)", ip, err, out)
-	}
-	return nil
-}
-
-// generateRandomIPv6 从 CIDR 生成随机 IPv6 地址
-func generateRandomIPv6(cidrStr string) (string, error) {
-	_, ipv6Net, err := net.ParseCIDR(cidrStr)
-	if err != nil {
-		return "", err
-	}
-
-	maskOnes, maskBits := ipv6Net.Mask.Size()
-	if maskBits != 128 {
-		return "", fmt.Errorf("expected /128 mask for address generation, got /%d", maskOnes)
-	}
-
-	// 计算可变位数
-	randomBits := 128 - maskOnes
-	if randomBits <= 0 {
-		return ipv6Net.IP.String(), nil
-	}
-
-	randomBytes := make([]byte, (randomBits+7)/8)
-	if _, err := rand.Read(randomBytes); err != nil {
-		return "", err
-	}
-
-	ip := make(net.IP, 16)
-	copy(ip, ipv6Net.IP.To16())
-
-	// 将随机字节写入低位
-	for i := 0; i < len(randomBytes); i++ {
-		byteIndex := 15 - i
-		if byteIndex < 0 {
-			break
-		}
-		// 清除原字节中将被覆盖的位（如果 randomBits 不是 8 的倍数）
-		if i == len(randomBytes)-1 && randomBits%8 != 0 {
-			mask := byte((1 << (randomBits % 8)) - 1)
-			ip[byteIndex] = (ip[byteIndex] &^ mask) | (randomBytes[i] & mask)
-		} else {
-			ip[byteIndex] = randomBytes[i]
-		}
-	}
-
-	return ip.String(), nil
-}
-
-// ========== HTTP Proxy Logic ==========
-
-// ========== 辅助函数 ==========
-
-func getLocalIPv6() (string, error) {
-	ifaces, err := net.Interfaces()
-	if err != nil {
-		return "", err
-	}
-
-	for _, iface := range ifaces {
-		if iface.Name != netIf {
-			continue
-		}
-		addrs, err := iface.Addrs()
+		err := socks5Server.ListenAndServe("tcp", fmt.Sprintf("0.0.0.0:%d", socks5Port))
 		if err != nil {
-			continue
+			log.Fatal("socks5 Server err:", err)
 		}
-		for _, addr := range addrs {
-			if ipnet, ok := addr.(*net.IPNet); ok && ipnet.IP.To4() == nil {
-				if ipnet.IP.IsGlobalUnicast() && !ipnet.IP.IsLinkLocalUnicast() {
-					mask := net.CIDRMask(prefixLen, 128)
-					subnetIP := ipnet.IP.Mask(mask)
-					_, subnet, _ := net.ParseCIDR(subnetIP.String() + fmt.Sprintf("/%d", prefixLen))
-					return subnet.String(), nil
-				}
-			}
+
+	}()
+	go func() {
+		err := http.ListenAndServe(fmt.Sprintf("0.0.0.0:%d", httpPort), httpProxy)
+		if err != nil {
+			log.Fatal("http Server err", err)
 		}
+	}()
+	execCmd("sysctl", "net.ipv6.ip_nonlocal_bind=1") //删除上一个ip
+	log.Println("server running ...")
+	log.Printf("http running on 0.0.0.0:%d", httpPort)
+	log.Printf("socks5 running on 0.0.0.0:%d", socks5Port)
+	wg.Wait()
+
+}
+func execCmd(name string, arg ...string) {
+	log.Printf("执行命令: %s %s", name, arg)
+	c := exec.Command(name, arg...)
+	output, err := c.CombinedOutput()
+	if err != nil {
+		log.Printf("命令执行失败: %v\n执行输出：%s", err, output)
+		return
 	}
-	return "", fmt.Errorf("no global IPv6 found on interface %s", netIf)
+	if len(output) > 0 {
+		log.Printf("命令输出: %s", string(output))
+	}
+}
+
+func generateRandomIPv6(cidr string) (string, error) {
+	// 解析CIDR
+	_, ipv6Net, err := net.ParseCIDR(cidr)
+	if err != nil {
+		return "", err
+	}
+
+	// 获取网络部分和掩码长度
+	maskSize, _ := ipv6Net.Mask.Size()
+
+	// 计算随机部分的长度
+	randomPartLength := 128 - maskSize
+
+	// 生成随机部分
+	randomPart := make([]byte, randomPartLength/8)
+	_, err = rand.Read(randomPart)
+	if err != nil {
+		return "", err
+	}
+
+	// 获取网络部分
+	networkPart := ipv6Net.IP.To16()
+
+	// 合并网络部分和随机部分
+	for i := 0; i < len(randomPart); i++ {
+		networkPart[16-len(randomPart)+i] = randomPart[i]
+	}
+
+	return networkPart.String(), nil
 }
