@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"io"
 	"log"
 	"net"
@@ -11,105 +10,121 @@ import (
 )
 
 func init() {
-	httpProxy.Verbose = runEnv == "dev"
+	if runEnv == "dev" {
+		httpProxy.Verbose = true
+	} else {
+		httpProxy.Verbose = false
+	}
 
-	httpProxy.OnRequest().DoFunc(func(req *http.Request, ctx *goproxy.ProxyCtx) (*http.Request, *http.Response) {
-		outgoingIP, err := generateRandomIPv6(cidr)
-		if err != nil {
-			if runEnv == "dev" {
-				log.Printf("[HTTP] Generate IPv6 error: %v", err)
+	httpProxy.OnRequest().DoFunc(
+		func(req *http.Request, ctx *goproxy.ProxyCtx) (*http.Request, *http.Response) {
+			// 为 IPv6 地址添加方括号
+			outgoingIP, err := generateRandomIPv6(cidr)
+			if err != nil {
+				if runEnv == "dev" {
+					log.Printf("Generate random IPv6 error: %v", err)
+				}
+				return req, nil
 			}
-			return req, nil
-		}
-
-		if err := addIPv6ToInterface(outgoingIP, netIf); err != nil {
+			outgoingIP = "[" + outgoingIP + "]"
+			// 使用指定的出口 IP 地址创建连接
+			localAddr, err := net.ResolveTCPAddr("tcp", outgoingIP+":0")
 			if runEnv == "dev" {
-				log.Printf("[HTTP] Failed to add IP %s: %v", outgoingIP, err)
+				log.Printf("[http] outgoingIp: %s", outgoingIP)
 			}
-			return req, nil
-		}
-
-		localAddr, err := net.ResolveTCPAddr("tcp", "["+outgoingIP+"]"+":0")
-		if runEnv == "dev" {
-			log.Printf("[HTTP] Outgoing IP: %s", outgoingIP)
-		}
-		if err != nil {
-			if runEnv == "dev" {
-				log.Printf("[HTTP] Resolve local addr error: %v", err)
+			if err != nil {
+				if runEnv == "dev" {
+					log.Printf("[http] Resolve local address error: %v", err)
+				}
+				return req, nil
 			}
-			return req, nil
-		}
-
-		dialer := &net.Dialer{LocalAddr: localAddr}
-		client := &http.Client{
-			Transport: &http.Transport{
-				DialContext: dialer.DialContext,
-			},
-		}
-
-		newReq, err := http.NewRequestWithContext(req.Context(), req.Method, req.URL.String(), req.Body)
-		if err != nil {
-			if runEnv == "dev" {
-				log.Printf("[HTTP] New request error: %v", err)
+			dialer := net.Dialer{
+				LocalAddr: localAddr,
 			}
-			return req, nil
-		}
-		newReq.Header = req.Header.Clone()
 
-		resp, err := client.Do(newReq)
-		if err != nil {
-			if runEnv == "dev" {
-				log.Printf("[HTTP] Request error: %v", err)
+			// 通过代理服务器建立到目标服务器的连接
+			// 发送 http 请求
+			// 使用自定义拨号器设置 HTTP 客户端
+			// 创建新的 HTTP 请求
+
+			newReq, err := http.NewRequest(req.Method, req.URL.String(), req.Body)
+			if err != nil {
+				if runEnv == "dev" {
+					log.Printf("[http] New request error: %v", err)
+				}
+				return req, nil
 			}
-			return req, nil
-		}
-		return req, resp
-	})
+			newReq.Header = req.Header
 
-	httpProxy.OnRequest().HijackConnect(func(req *http.Request, client net.Conn, ctx *goproxy.ProxyCtx) {
-		outgoingIP, err := generateRandomIPv6(cidr)
-		if err != nil {
-			if runEnv == "dev" {
-				log.Printf("[HTTPS] Generate IPv6 error: %v", err)
+			// 设置自定义拨号器的 HTTP 客户端
+			client := &http.Client{
+				Transport: &http.Transport{
+					DialContext: dialer.DialContext,
+				},
 			}
-			client.Write([]byte("HTTP/1.1 500 Internal Server Error\r\n\r\n"))
-			client.Close()
-			return
-		}
 
-		if err := addIPv6ToInterface(outgoingIP, netIf); err != nil {
-			if runEnv == "dev" {
-				log.Printf("[HTTPS] Failed to add IP %s: %v", outgoingIP, err)
+			// 发送 HTTP 请求
+			resp, err := client.Do(newReq)
+			if err != nil {
+				if runEnv == "dev" {
+					log.Printf("[http] Send request error: %v", err)
+				}
+				return req, nil
 			}
-			client.Write([]byte("HTTP/1.1 500 Internal Server Error\r\n\r\n"))
-			client.Close()
-			return
-		}
+			return req, resp
+		},
+	)
 
-		localAddr, err := net.ResolveTCPAddr("tcp", "["+outgoingIP+"]"+":0")
-		if err != nil {
-			if runEnv == "dev" {
-				log.Printf("[HTTPS] Resolve local addr error: %v", err)
+	httpProxy.OnRequest().HijackConnect(
+		func(req *http.Request, client net.Conn, ctx *goproxy.ProxyCtx) {
+			// 通过代理服务器建立到目标服务器的连接
+			outgoingIP, err := generateRandomIPv6(cidr)
+			if err != nil {
+				if runEnv == "dev" {
+					log.Printf("Generate random IPv6 error: %v", err)
+				}
+				return
 			}
-			client.Write([]byte("HTTP/1.1 500 Internal Server Error\r\n\r\n"))
-			client.Close()
-			return
-		}
-
-		dialer := &net.Dialer{LocalAddr: localAddr}
-		server, err := dialer.DialContext(context.Background(), "tcp", req.URL.Host)
-		if err != nil {
-			if runEnv == "dev" {
-				log.Printf("[HTTPS] Dial error to %s: %v", req.URL.Host, err)
+			outgoingIP = "[" + outgoingIP + "]"
+			// 使用指定的出口 IP 地址创建连接
+			localAddr, err := net.ResolveTCPAddr("tcp", outgoingIP+":0")
+			if err != nil {
+				if runEnv == "dev" {
+					log.Printf("[http] Resolve local address error: %v", err)
+				}
+				return
 			}
-			client.Write([]byte("HTTP/1.1 502 Bad Gateway\r\n\r\n"))
-			client.Close()
-			return
-		}
+			dialer := net.Dialer{
+				LocalAddr: localAddr,
+			}
 
-		client.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n"))
+			// 通过代理服务器建立到目标服务器的连接
+			server, err := dialer.Dial("tcp", req.URL.Host)
+			if err != nil {
+				if runEnv == "dev" {
+					log.Printf("[http] Dial to %s error: %v", req.URL.Host, err)
+				}
+				client.Write([]byte("HTTP/1.1 500 Internal Server Error\r\n\r\n"))
+				client.Close()
+				return
+			}
 
-		go func() { io.Copy(server, client); server.Close(); client.Close() }()
-		go func() { io.Copy(client, server); server.Close(); client.Close() }()
-	})
+			// 响应客户端连接已建立
+			client.Write([]byte("HTTP/1.0 200 OK\r\n\r\n"))
+			// 从客户端复制数据到目标服务器
+			go func() {
+				defer server.Close()
+				defer client.Close()
+				io.Copy(server, client)
+			}()
+
+			// 从目标服务器复制数据到客户端
+			go func() {
+				defer server.Close()
+				defer client.Close()
+				io.Copy(client, server)
+			}()
+
+		},
+	)
 }
