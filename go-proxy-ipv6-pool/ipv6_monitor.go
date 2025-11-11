@@ -21,7 +21,9 @@ func changeNdppdConfig(currentIpv6 string, prevIpv6 string) {
 	confContent := fmt.Sprintf(`
 route-ttl 30000
 proxy %s {
-	# router no
+	router no
+	timeout 500
+	ttl 30000
     rule %s {
         static
     }

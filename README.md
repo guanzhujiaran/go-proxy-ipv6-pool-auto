@@ -9,20 +9,20 @@ The simple extension of [XiaoMiku01/go-proxy-ipv6-pool](https://github.com/XiaoM
 ```bash
 apt install ndppd -y
 sysctl net.ipv6.ip_nonlocal_bind=1
-ip route add local xxx/64 dev eth0
+sudo ip route add local xx:xx:xx:xx::1/64 dev eth0
 ```
 
 ```bash
 vim /etc/ndppd.conf
 ```
 
-make sure xxx is exactly same as above
-
 ```text
 route-ttl 30000
 proxy eth0 {
-        router no
-    rule xxx/64 {
+    router no
+	timeout 500
+	ttl 30000
+    rule xx:xx:xx:xx::/64 {
         static
     }
 }
@@ -35,10 +35,8 @@ service ndppd restart
 test with curl
 
 ```bash
-curl --interface yyy test.ipw.cn
+curl --interface 2409:8a1e:2e90:d20::43 test.ipw.cn
 ```
-
-response yyy if yyy in cidr xxx
 
 ```bash
     go run ./go-proxy-ipv6-pool --port <port> --prefix < your ipv6 cidr prefix length >  # e.g. 2001:399:8205:ae00::/64
@@ -59,14 +57,20 @@ response yyy if yyy in cidr xxx
 > make sure ：
 > 1. sysctl net.ipv6.ip_nonlocal_bind=1
 > 2. /etc/ndppd.conf rule ip match ifconfig ip
-
+> 3. ip -6 ro has one public ipv6 route
 ### reset ifconfig setting if not work (Caution)
 
 ```bash
-ip addr flush dev eth0
-ip -6 ro flush dev eth0
-ifconfig eth0 down
-ifconfig eth0 up
+ip addr flush dev eth0;
+ip -6 ro flush dev eth0;
+sudo ifconfig eth0 down; 
+sudo ifconfig eth0 up;
+```
+```bash
+ip addr flush dev lo;
+ip -6 ro flush dev lo;
+sudo ifconfig lo down; 
+sudo ifconfig lo up;
 ```
 
 ## License
