@@ -7,11 +7,7 @@ services:
     environment:
       - NET_IF=${NET_IF:-eth0}
       - RUN_ENV=prod
-      # 出口地址池：预挂一批随机地址常驻网卡，命中 CPE 邻居缓存后首包不丢
-      # - EXIT_POOL_SIZE=128        # 池大小，受光猫邻居表容量限制，建议 64~512
-      # - EXIT_POOL_TTL=600         # 整批轮换周期（秒）
-      # - EXIT_POOL_MAX_USES=50     # 单个地址最大使用次数
-      # 拨号：坏出口早放弃早换
+      # 拨号：坏出口早放弃早换（每个请求都用全新的随机地址，失败就换下一个）
       # - DIAL_TIMEOUT_SECONDS=5    # 单个出口拨号超时
       # - DIAL_MAX_ATTEMPTS=5       # 单次请求最多换几个随机出口
     # 直接挂载宿主机编译好的二进制：改完 Go 代码只需 ./build.sh && docker compose restart，

@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -36,16 +37,15 @@ func main() {
 	}
 	netIf = os.Getenv("NET_IF")
 	runEnv = os.Getenv("RUN_ENV")
-	// 拨号参数与出口池参数从环境变量读取（.env 已在上面加载）
+	// 拨号参数从环境变量读取（.env 已在上面加载）
 	initDialTuning()
-	initExitPoolFromEnv()
 	// 随机 IPv6 出口是本机网卡上不存在的地址，内核必须允许 bind 非本机地址；
 	// 容器内 /proc/sys 通常只读，宿主机已配置时这里会直接跳过
 	ensureNonLocalBind()
 	// 回程包能否回来取决于 NDP 代答：优先让内核 proxy_ndp 兜底，ndppd 作为补充
 	ensureProxyNdp()
-	// 预挂一批随机出口地址（地址常驻网卡，CPE 邻居缓存命中后没有首包丢失）
-	exitPoolInstance.start()
+	// 清理上次异常退出可能遗留在网卡上的出口地址
+	go cleanupStaleExitAddresses()
 
 	httpPort := port
 	socks5Port := port + 1
@@ -143,6 +143,16 @@ func readNonLocalBind() string {
 		return ""
 	}
 	return strings.TrimSpace(string(b))
+}
+
+// envInt 读取正整数环境变量，缺失或非法时返回默认值
+func envInt(key string, def int) int {
+	if raw := os.Getenv(key); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
+			return n
+		}
+	}
+	return def
 }
 
 func generateRandomIPv6(cidr string) (string, error) {

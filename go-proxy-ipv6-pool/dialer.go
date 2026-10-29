@@ -47,17 +47,13 @@ func dialWithRandomIPv6(ctx context.Context, tag, network, addr string) (net.Con
 
 	var lastErr error
 	for attempt := 1; attempt <= dialMaxAttempts; attempt++ {
-		// 优先从常驻出口池里随机取（地址已在网卡上，命中 CPE 邻居缓存，首包不丢）；
-		// 池未就绪时回落到「按请求生成 + 临时挂地址 + 用完删除」。
-		randomIP, pooled := exitPoolInstance.pick()
-		if !pooled {
-			ip, err := generateRandomIPv6(cidr)
-			if err != nil {
-				// 生成出口地址失败与出口是否可用无关，重试没有意义
-				log.Printf("%s Generate random IPv6 error: %v", tag, err)
-				return nil, "", err
-			}
-			randomIP = ip
+		// 每个请求都用一个全新的随机地址：临时挂到网卡 → 连接 → 用完删除。
+		// 不做地址池复用，随机次数足够多时总能碰到链路上可用的地址。
+		randomIP, err := generateRandomIPv6(cidr)
+		if err != nil {
+			// 生成出口地址失败与出口是否可用无关，重试没有意义
+			log.Printf("%s Generate random IPv6 error: %v", tag, err)
+			return nil, "", err
 		}
 		outgoingIP := "[" + randomIP + "]"
 
@@ -66,22 +62,15 @@ func dialWithRandomIPv6(ctx context.Context, tag, network, addr string) (net.Con
 		if err != nil {
 			lastErr = err
 			log.Printf("%s Resolve local address %s error: %v", tag, outgoingIP, err)
-			if pooled {
-				exitPoolInstance.drop(randomIP)
-			}
 			continue
 		}
 
-		// 池外地址才需要临时挂到网卡上（nodad 立即生效）：
-		// 只有真实存在于接口上的地址，CPE 才会把回程包送过来。
-		// 挂不上时（缺 NET_ADMIN）回落到内核 proxy_ndp 条目 / ndppd 代答。
-		addrAdded := false
+		// 地址挂到网卡上（nodad 立即生效）：只有真实存在于接口上的地址，
+		// CPE 才会把回程包送过来。挂不上时（缺 NET_ADMIN）回落到内核 proxy_ndp / ndppd 代答。
+		addrAdded := addExitAddress(randomIP)
 		proxyAdded := false
-		if !pooled {
-			addrAdded = addExitAddress(randomIP)
-			if !addrAdded {
-				proxyAdded = addNdpProxyEntry(randomIP)
-			}
+		if !addrAdded {
+			proxyAdded = addNdpProxyEntry(randomIP)
 		}
 
 		dialCtx, cancel := context.WithTimeout(ctx, dialTimeout)
@@ -99,9 +88,6 @@ func dialWithRandomIPv6(ctx context.Context, tag, network, addr string) (net.Con
 		}
 		if err == nil {
 			return conn, outgoingIP, nil
-		}
-		if pooled {
-			exitPoolInstance.drop(randomIP)
 		}
 
 		lastErr = err

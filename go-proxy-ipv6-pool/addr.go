@@ -2,8 +2,11 @@ package main
 
 import (
 	"log"
+	"net"
 	"strconv"
+	"strings"
 	"sync"
+	"time"
 )
 
 // 随机出口地址为什么要「挂到网卡上」：
@@ -31,7 +34,7 @@ func addExitAddress(ip string) bool {
 	return true
 }
 
-// delExitAddress 连接建立后清理临时地址，避免接口上堆积成千上万个地址。
+// delExitAddress 用完即删：每个请求都是一个全新的随机地址，接口上不该堆积地址。
 // 池前缀的 local 路由仍在，已建立连接的回程包照常投递到本机。
 func delExitAddress(ip string) {
 	if netIf == "" {
@@ -43,4 +46,52 @@ func delExitAddress(ip string) {
 // prefixLenStr 地址挂到接口时用的前缀长度，与池前缀保持一致
 func prefixLenStr() string {
 	return strconv.Itoa(prefixLen)
+}
+
+// cleanupStaleExitAddresses 启动时清理上次运行残留在网卡上的出口地址。
+// host 网络下地址挂在宿主机 netns 上，容器重启不会自动消失，进程异常退出时会残留。
+func cleanupStaleExitAddresses() {
+	for i := 0; i < 60 && cidr == ""; i++ {
+		time.Sleep(time.Second)
+	}
+	if cidr == "" || netIf == "" {
+		return
+	}
+
+	real, err := getLocalIPv6()
+	if err != nil {
+		log.Printf("残留清理：读取本机地址失败，跳过: %v", err)
+		return
+	}
+	_, ipnet, err := net.ParseCIDR(cidr)
+	if err != nil {
+		log.Printf("残留清理：解析池前缀失败: %v", err)
+		return
+	}
+
+	out, err := runCmd("ip", "-6", "-o", "addr", "show", "dev", netIf)
+	if err != nil {
+		log.Printf("残留清理：读取网卡地址失败: %v", err)
+		return
+	}
+
+	removed := 0
+	for _, line := range strings.Split(out, "\n") {
+		fields := strings.Fields(line)
+		for i, field := range fields {
+			if field != "inet6" || i+1 >= len(fields) {
+				continue
+			}
+			addr := strings.SplitN(fields[i+1], "/", 2)[0]
+			ip := net.ParseIP(addr)
+			if ip == nil || !ipnet.Contains(ip) || addr == real {
+				continue
+			}
+			delExitAddress(addr)
+			removed++
+		}
+	}
+	if removed > 0 {
+		log.Printf("残留清理：删除上次运行遗留的 %d 个出口地址", removed)
+	}
 }
