@@ -1,6 +1,6 @@
 ### Go template
 # If you prefer the allow list template instead of the deny list, see community template:
-# https://github.com/github/gitignore/blob/main/community/Golang/Go.AllowList.gitignore
+# https://github.com/github/gitignore/blob/main/Go.AllowList.gitignore
 #
 # Binaries for programs and plugins
 .idea
@@ -24,3 +24,10 @@ go.work
 
 /go-proxy-ipv6-pool/.env.dev
 /go-proxy-ipv6-pool/.env
+/.env
+
+# build.sh 产出的二进制，由 docker compose 挂载进容器
+/bin/
+
+# Python 诊断脚本缓存
+__pycache__/

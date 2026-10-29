@@ -18,28 +18,13 @@ func init() {
 	// 创建一个 SOCKS5 服务器配置
 	socks5Conf = &socks5.Config{
 		Dial: func(ctx context.Context, network, addr string) (net.Conn, error) {
-
-			outgoingIP, err := generateRandomIPv6(cidr)
+			// 拨号层负责「单次超时就换随机出口」重试
+			conn, outgoingIP, err := dialWithRandomIPv6(ctx, "[socks5]", network, addr)
 			if err != nil {
-				log.Printf("Generate random IPv6 error: %v", err)
 				return nil, err
 			}
-			outgoingIP = "[" + outgoingIP + "]"
-
-			// 使用指定的出口 IP 地址创建连接
-			localAddr, err := net.ResolveTCPAddr("tcp", outgoingIP+":0")
-			if err != nil {
-				log.Printf("[socks5] Resolve local address error: %v", err)
-				return nil, err
-			}
-			dialer := net.Dialer{
-				LocalAddr: localAddr,
-			}
-			// 通过代理服务器建立到目标服务器的连接
-
-			// if runEnv == "dev" {
 			log.Println("[socks5]", addr, "via", outgoingIP)
-			return dialer.DialContext(ctx, network, addr)
+			return conn, nil
 		},
 	}
 	var err error

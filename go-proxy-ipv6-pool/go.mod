@@ -1,6 +1,6 @@
 module go-proxy-ipv6-pool
 
-go 1.25.1
+go 1.27.3
 
 require (
 	github.com/armon/go-socks5 v0.0.0-20160902184237-e75332964ef5

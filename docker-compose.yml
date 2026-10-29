@@ -2,17 +2,37 @@ services:
   go-proxy-server:
     container_name: go-proxy-server
     build: .
-    ports:
-      - "3128:3128"
-    networks:
-      - my-network
+    # ndppd 与随机源地址绑定都要求看到宿主机真实网卡，不能走 bridge
+    network_mode: host
     environment:
-      - NET_IF=eth0
-
-networks:
-  my-network:
-    enable_ipv6: true
-    driver: bridge
-    ipam:
-      config:
-        - subnet: "2409:8a1e:2e90:d20::/64"
+      - NET_IF=${NET_IF:-eth0}
+      - RUN_ENV=prod
+      # 出口地址池：预挂一批随机地址常驻网卡，命中 CPE 邻居缓存后首包不丢
+      # - EXIT_POOL_SIZE=128        # 池大小，受光猫邻居表容量限制，建议 64~512
+      # - EXIT_POOL_TTL=600         # 整批轮换周期（秒）
+      # - EXIT_POOL_MAX_USES=50     # 单个地址最大使用次数
+      # 拨号：坏出口早放弃早换
+      # - DIAL_TIMEOUT_SECONDS=5    # 单个出口拨号超时
+      # - DIAL_MAX_ATTEMPTS=5       # 单次请求最多换几个随机出口
+    # 直接挂载宿主机编译好的二进制：改完 Go 代码只需 ./build.sh && docker compose restart，
+    # 不必重新构建镜像。镜像里仍内置一份，挂载目录里没有二进制时自动回落到内置版本。
+    volumes:
+      - ./bin:/opt/bin:ro
+    command:
+      - /bin/sh
+      - -c
+      - |
+        if [ -x /opt/bin/go-proxy-ipv6-pool ]; then
+          exec /opt/bin/go-proxy-ipv6-pool
+        fi
+        exec /app/go-proxy-ipv6-pool
+    # 程序会执行 `ip route replace local <前缀>/64 dev lo`、`ip -6 addr add/del`、
+    # 写 /etc/ndppd.conf 并重启 ndppd：
+    # NET_ADMIN 用于改宿主机路由表/接口地址，NET_RAW 用于 ndppd 收发 NDP 原始报文
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    # docker-default 的 AppArmor 策略会拦原始套接字等操作，放开后 ndppd 才能正常应答
+    security_opt:
+      - apparmor=unconfined
+    restart: unless-stopped

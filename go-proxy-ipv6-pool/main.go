@@ -1,7 +1,9 @@
 package main
 
 import (
+	"context"
 	"crypto/rand"
+	"errors"
 	"flag"
 	"fmt"
 	"github.com/joho/godotenv"
@@ -10,7 +12,9 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
+	"time"
 )
 
 var port int
@@ -28,10 +32,21 @@ func main() {
 	flag.Parse()
 	err := godotenv.Load(".env")
 	if err != nil {
-		log.Fatal("Error loading .env file\n%v", err)
+		log.Fatalf("Error loading .env file: %v", err)
 	}
 	netIf = os.Getenv("NET_IF")
 	runEnv = os.Getenv("RUN_ENV")
+	// 拨号参数与出口池参数从环境变量读取（.env 已在上面加载）
+	initDialTuning()
+	initExitPoolFromEnv()
+	// 随机 IPv6 出口是本机网卡上不存在的地址，内核必须允许 bind 非本机地址；
+	// 容器内 /proc/sys 通常只读，宿主机已配置时这里会直接跳过
+	ensureNonLocalBind()
+	// 回程包能否回来取决于 NDP 代答：优先让内核 proxy_ndp 兜底，ndppd 作为补充
+	ensureProxyNdp()
+	// 预挂一批随机出口地址（地址常驻网卡，CPE 邻居缓存命中后没有首包丢失）
+	exitPoolInstance.start()
+
 	httpPort := port
 	socks5Port := port + 1
 
@@ -57,7 +72,6 @@ func main() {
 			log.Fatal("http Server err", err)
 		}
 	}()
-	execCmd("sysctl", "net.ipv6.ip_nonlocal_bind=1")
 	log.Println("server running ...")
 	log.Printf("http running on 0.0.0.0:%d", httpPort)
 	log.Printf("socks5 running on 0.0.0.0:%d", socks5Port)
@@ -66,8 +80,7 @@ func main() {
 }
 func execCmd(name string, arg ...string) {
 	log.Printf("执行命令: %s %s", name, arg)
-	c := exec.Command(name, arg...)
-	output, err := c.CombinedOutput()
+	output, err := runCmd(name, arg...)
 	if err != nil {
 		log.Printf("命令执行失败: %v\n执行输出：%s", err, output)
 		return
@@ -75,6 +88,61 @@ func execCmd(name string, arg ...string) {
 	if len(output) > 0 {
 		log.Printf("命令输出: %s", string(output))
 	}
+}
+
+// runCmd 执行外部命令并返回合并输出；错误原样返回，由调用方决定是报错还是降级提示。
+func runCmd(name string, arg ...string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	c := exec.CommandContext(ctx, name, arg...)
+	// 服务脚本（如 ndppd 的 init 脚本）启动守护进程后，守护进程会继承 stdout/stderr 管道，
+	// CombinedOutput 等不到 EOF 就会一直卡住；WaitDelay 到期后强制关闭管道解除阻塞。
+	c.WaitDelay = 5 * time.Second
+	output, err := c.CombinedOutput()
+	if err != nil && !errors.Is(err, exec.ErrWaitDelay) {
+		return string(output), err
+	}
+	return string(output), nil
+}
+
+// nonLocalBindKey 允许 bind 本机网卡上不存在的地址，随机 IPv6 出口依赖它
+const nonLocalBindKey = "net.ipv6.ip_nonlocal_bind"
+
+// nonLocalBindProcPath sysctl 键对应的 /proc 路径，读它不需要特权
+const nonLocalBindProcPath = "/proc/sys/net/ipv6/ip_nonlocal_bind"
+
+// ensureNonLocalBind 确保 net.ipv6.ip_nonlocal_bind=1。
+// host 网络模式下该键与宿主机共享 netns：宿主机已配置时直接跳过，避免容器内做无意义的写入；
+// 容器内 /proc/sys 通常是只读挂载，写不动时只给宿主机侧的处理办法，不当作程序错误。
+func ensureNonLocalBind() {
+	if readNonLocalBind() == "1" {
+		return
+	}
+
+	log.Printf("%s 未开启，尝试写入 1", nonLocalBindKey)
+	output, err := runCmd("sysctl", nonLocalBindKey+"=1")
+	if err == nil && readNonLocalBind() == "1" {
+		log.Printf("%s 已开启", nonLocalBindKey)
+		return
+	}
+
+	if err != nil {
+		log.Printf("警告：%s 写入失败（%v）：%s", nonLocalBindKey, err, strings.TrimSpace(output))
+	} else {
+		log.Printf("警告：%s 写入后仍未生效", nonLocalBindKey)
+	}
+	log.Printf("警告：容器内 /proc/sys 为只读挂载，请在宿主机执行 %s 后重启容器：sudo sysctl -w %s=1",
+		nonLocalBindKey, nonLocalBindKey)
+	log.Printf("持久化：echo '%s=1' | sudo tee /etc/sysctl.d/99-ipv6-pool.conf", nonLocalBindKey)
+}
+
+// readNonLocalBind 读取当前值，读不到时返回空串
+func readNonLocalBind() string {
+	b, err := os.ReadFile(nonLocalBindProcPath)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(b))
 }
 
 func generateRandomIPv6(cidr string) (string, error) {

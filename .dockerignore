@@ -1,0 +1,7 @@
+.git
+.gitignore
+bin
+.env
+**/.env
+*.md
+*.py
