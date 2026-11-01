@@ -42,10 +42,15 @@ func main() {
 	// 随机 IPv6 出口是本机网卡上不存在的地址，内核必须允许 bind 非本机地址；
 	// 容器内 /proc/sys 通常只读，宿主机已配置时这里会直接跳过
 	ensureNonLocalBind()
-	// 回程包能否回来取决于 NDP 代答：优先让内核 proxy_ndp 兜底，ndppd 作为补充
-	ensureProxyNdp()
-	// 清理上次异常退出可能遗留在网卡上的出口地址
+	// 回程包的 NS 由内置 NDP 代答器应答（NA 带 override，CPE 才采纳）。
+	// ndppd 回的 NA 没有 override，实测 CPE 不采纳，这里直接停掉它，避免双应答干扰。
+	if _, err := runCmd("pkill", "-x", "ndppd"); err == nil {
+		log.Printf("已停止 ndppd（改由内置 NDP 代答器应答，NA 带 override）")
+	}
+	// 清理旧版本（每请求 add/del 地址）残留在网卡上的出口地址
 	go cleanupStaleExitAddresses()
+	// 等池前缀就绪后启动 NDP 代答器
+	go startNdpResponderWhenReady()
 
 	httpPort := port
 	socks5Port := port + 1
@@ -78,6 +83,8 @@ func main() {
 	wg.Wait()
 
 }
+
+// execCmd 执行外部命令并记录日志（命令失败只提示，不影响主流程）
 func execCmd(name string, arg ...string) {
 	log.Printf("执行命令: %s %s", name, arg)
 	output, err := runCmd(name, arg...)

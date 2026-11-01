@@ -47,8 +47,9 @@ func dialWithRandomIPv6(ctx context.Context, tag, network, addr string) (net.Con
 
 	var lastErr error
 	for attempt := 1; attempt <= dialMaxAttempts; attempt++ {
-		// 每个请求都用一个全新的随机地址：临时挂到网卡 → 连接 → 用完删除。
-		// 不做地址池复用，随机次数足够多时总能碰到链路上可用的地址。
+		// 每个请求用一个全新的随机地址作为源地址，只 bind、不改网卡：
+		// 网络配置在启动/前缀变化时已配好（local 路由 + ndppd 静态代答），
+		// 请求期间不产生任何 netlink 地址事件，避免浏览器的 network-change 检测。
 		randomIP, err := generateRandomIPv6(cidr)
 		if err != nil {
 			// 生成出口地址失败与出口是否可用无关，重试没有意义
@@ -57,20 +58,11 @@ func dialWithRandomIPv6(ctx context.Context, tag, network, addr string) (net.Con
 		}
 		outgoingIP := "[" + randomIP + "]"
 
-		// 使用指定的出口 IP 地址创建连接
 		localAddr, err := net.ResolveTCPAddr("tcp", outgoingIP+":0")
 		if err != nil {
 			lastErr = err
 			log.Printf("%s Resolve local address %s error: %v", tag, outgoingIP, err)
 			continue
-		}
-
-		// 地址挂到网卡上（nodad 立即生效）：只有真实存在于接口上的地址，
-		// CPE 才会把回程包送过来。挂不上时（缺 NET_ADMIN）回落到内核 proxy_ndp / ndppd 代答。
-		addrAdded := addExitAddress(randomIP)
-		proxyAdded := false
-		if !addrAdded {
-			proxyAdded = addNdpProxyEntry(randomIP)
 		}
 
 		dialCtx, cancel := context.WithTimeout(ctx, dialTimeout)
@@ -80,12 +72,6 @@ func dialWithRandomIPv6(ctx context.Context, tag, network, addr string) (net.Con
 		start := time.Now()
 		conn, err := dialer.DialContext(dialCtx, network, addr)
 		cancel()
-		if addrAdded {
-			delExitAddress(randomIP)
-		}
-		if proxyAdded {
-			delNdpProxyEntry(randomIP)
-		}
 		if err == nil {
 			return conn, outgoingIP, nil
 		}

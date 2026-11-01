@@ -6,54 +6,27 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 )
 
-func changeNdppdConfig(currentIpv6 string, prevIpv6 string) {
+// applyPoolPrefix 前缀变化时更新 local 路由。
+//
+// 整段 /64 声明为本机地址后，该前缀内任意地址都能作为源地址 dial（配合
+// net.ipv6.ip_nonlocal_bind=1）；回程包的 NS 由内置 NDP 代答器（ndp_responder.go）应答，
+// 它回的 NA 带 override 标志，CPE 才会采纳。
+//
+// 不再使用 ndppd：抓包实测它回的 NA 只有 [solicited]、没有 override，本环境 CPE 不采纳。
+// 整个过程只在启动/前缀变化时执行一次，请求路径上不改任何网络配置。
+func applyPoolPrefix(currentIpv6 string, prevIpv6 string) {
 	addAddr := fmt.Sprintf("%s/%d", currentIpv6, prefixLen)
-	log.Printf("变更 ndppd 配置文件：%s", addAddr)
-	//这里实际只要添加当前ip然后加一个/64的掩码就行了，ndppd的配置也是，不需要添加标准的cidr
+	log.Printf("更新池前缀：%s", addAddr)
 	if prevIpv6 != "" {
 		prevAddr := fmt.Sprintf("%s/%d", prevIpv6, prefixLen)
-		execCmd("ip", "route", "del", "local", prevAddr, "dev", "lo") //删除上一个ip
+		execCmd("ip", "route", "del", "local", prevAddr, "dev", "lo") // 删除上一个前缀
 	}
 	// 用 replace 保证幂等：容器重启后同一条 local 路由已存在时 add 会报 File exists
 	execCmd("ip", "route", "replace", "local", addAddr, "dev", "lo")
-
-	confContent := fmt.Sprintf(`
-route-ttl 30000
-proxy %s {
-	router no
-	timeout 500
-	ttl 30000
-    rule %s {
-        static
-    }
-}
-`, netIf, addAddr)
-
-	if err := os.WriteFile("/etc/ndppd.conf", []byte(confContent), 0644); err != nil {
-		log.Printf("写入 ndppd.conf 失败: %v", err)
-		return
-	}
-
-	restartNdppd()
-}
-
-// restartNdppd 异步重启 ndppd。
-// 有些发行版的 init 脚本（或 systemd 对 sysv 脚本的猜测）会让 `service ndppd restart`
-// 阻塞几十秒，放在监控循环里会把整个流程卡住，因此后台执行并单独记录耗时。
-func restartNdppd() {
-	go func() {
-		start := time.Now()
-		// service restart 不会清理残留进程，出现两个 ndppd 同时持有 raw socket 时会互相漏答 NS，
-		// 导致随机出口回程不通；这里先杀掉旧实例，保证单实例。
-		_, _ = runCmd("pkill", "ndppd")
-		execCmd("service", "ndppd", "restart")
-		log.Printf("ndppd 重启流程结束，耗时 %s", time.Since(start))
-	}()
 }
 
 func getLocalIPv6() (string, error) {
@@ -151,7 +124,7 @@ func ipv6Monitor() {
 			if runEnv == "dev" {
 				log.Printf("获取到 IPv6 地址变动 currentCidr:[%s], currentIPv6Addr:[%s]", currentIpv6, ipv6Addr)
 			}
-			changeNdppdConfig(currentIpv6, ipv6Addr)
+			applyPoolPrefix(currentIpv6, ipv6Addr)
 			ipv6Addr = currentIpv6
 		} else if cidr != "" {
 			// 有些环境（如 WSL 镜像网络）会重置路由表，导致前缀的 local 路由消失，
@@ -163,8 +136,17 @@ func ipv6Monitor() {
 	}
 }
 
-// ensureLocalRoute 幂等地保证池前缀存在 local 路由（ip route replace 不会因已存在而报错）
+// ensureLocalRoute 幂等地保证池前缀存在 local 路由。
+//
+// 不能无脑 `ip route replace`：**即使内容完全一致，replace 也会发 netlink 路由变更
+// 通知**，对网络事件敏感的客户端（浏览器网络监视器等）会据此判定「网络已变更」并中断
+// 在途连接。本函数被 10 分钟一次的 monitor 循环调用，必须在路由已存在时零副作用：
+// 先查 `ip -6 route show table local`，命中就直接返回。
 func ensureLocalRoute(poolCidr string) {
+	out, err := runCmd("ip", "-6", "route", "show", "table", "local")
+	if err == nil && strings.Contains(out, "local "+poolCidr) {
+		return
+	}
 	execCmd("ip", "route", "replace", "local", poolCidr, "dev", "lo")
 }
 
