@@ -20,9 +20,39 @@ import (
 
 var port int
 var prefixLen int
-var cidr = ""
-var ipv6Addr = ""
 var netIf = ""
+
+// poolState 当前池前缀（已掩码的 CIDR，如 2409:8a1e:2e93:4fe0::/64）。
+// ipv6Monitor 会随光猫重新下发的 RA 改写它，拨号与 NDP 代答并发读取，必须加锁。
+type poolState struct {
+	mu   sync.RWMutex
+	cidr string
+	addr string
+}
+
+var pool poolState
+
+// set 更新池前缀与来源地址
+func (p *poolState) set(cidr, addr string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.cidr = cidr
+	p.addr = addr
+}
+
+// CIDR 当前池前缀（未就绪时为空串）
+func (p *poolState) CIDR() string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.cidr
+}
+
+// Addr 当前池前缀的来源地址（未就绪时为空串）
+func (p *poolState) Addr() string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.addr
+}
 
 // runEnv 表示运行环境，可选值为 "prod" 或 "dev"
 var runEnv string

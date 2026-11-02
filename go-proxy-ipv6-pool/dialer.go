@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net"
 	"time"
@@ -48,9 +49,15 @@ func dialWithRandomIPv6(ctx context.Context, tag, network, addr string) (net.Con
 	var lastErr error
 	for attempt := 1; attempt <= dialMaxAttempts; attempt++ {
 		// 每个请求用一个全新的随机地址作为源地址，只 bind、不改网卡：
-		// 网络配置在启动/前缀变化时已配好（local 路由 + ndppd 静态代答），
+		// 网络配置在启动/前缀变化时已配好（local 路由 + NDP 代答），
 		// 请求期间不产生任何 netlink 地址事件，避免浏览器的 network-change 检测。
-		randomIP, err := generateRandomIPv6(cidr)
+		poolCidr := pool.CIDR()
+		if poolCidr == "" {
+			// 池前缀还没就绪（宿主刚开机 / 光猫刚重启），没有源地址可用
+			requestPoolRecheck()
+			return nil, "", fmt.Errorf("pool prefix not ready yet")
+		}
+		randomIP, err := generateRandomIPv6(poolCidr)
 		if err != nil {
 			// 生成出口地址失败与出口是否可用无关，重试没有意义
 			log.Printf("%s Generate random IPv6 error: %v", tag, err)
@@ -81,5 +88,8 @@ func dialWithRandomIPv6(ctx context.Context, tag, network, addr string) (net.Con
 			tag, addr, outgoingIP, time.Since(start).Round(time.Millisecond), attempt, dialMaxAttempts, err)
 	}
 	log.Printf("%s dial %s failed, all %d random exits exhausted", tag, addr, dialMaxAttempts)
+	// 全部随机出口都不通，最可能是池前缀已失效（光猫换了前缀、本地还留着旧地址）：
+	// 立刻让 monitor 复查一次，而不是等下一个定时周期。
+	requestPoolRecheck()
 	return nil, "", lastErr
 }

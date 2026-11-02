@@ -42,16 +42,17 @@ var ndpState struct {
 // startNdpResponderWhenReady 等池前缀与网卡都确定后启动代答器
 // （前缀由 ipv6Monitor 首轮获取，网卡由 resolveNetIf 探测，宿主刚开机时两者都可能还没就绪）
 func startNdpResponderWhenReady() {
-	for i := 0; i < 60 && (cidr == "" || netIf == ""); i++ {
+	for pool.CIDR() == "" || netIf == "" {
 		time.Sleep(time.Second)
 	}
 	startNdpResponder()
 }
 
 // startNdpResponder 启动 NDP 代答（阻塞，需放在 goroutine 里）。
-// poolCIDR 为池前缀（如 2409:8a1e:2e94:84e0::/64），只对该段内的地址代答。
+// 只对池前缀内的地址代答；前缀变化时由 updateNdpPool 就地改写代答段。
 func startNdpResponder() {
-	if netIf == "" || cidr == "" {
+	poolCidr := pool.CIDR()
+	if netIf == "" || poolCidr == "" {
 		log.Printf("NDP 代答：网卡或池前缀未就绪，跳过")
 		return
 	}
@@ -60,9 +61,9 @@ func startNdpResponder() {
 		log.Printf("NDP 代答：读取网卡 %s 失败: %v", netIf, err)
 		return
 	}
-	_, pool, err := net.ParseCIDR(cidr)
+	poolNet, err := parsePoolNet(poolCidr)
 	if err != nil {
-		log.Printf("NDP 代答：解析池前缀 %s 失败: %v", cidr, err)
+		log.Printf("NDP 代答：解析池前缀 %s 失败: %v", poolCidr, err)
 		return
 	}
 
@@ -84,11 +85,11 @@ func startNdpResponder() {
 	ndpState.fd = fd
 	ndpState.ifindex = iface.Index
 	ndpState.hardware = iface.HardwareAddr
-	ndpState.pool = pool
+	ndpState.pool = poolNet
 	ndpState.Unlock()
 
 	log.Printf("NDP 代答已启动：网卡 %s（%s），代答段 %s，NA 带 override 标志",
-		netIf, iface.HardwareAddr, pool.String())
+		netIf, iface.HardwareAddr, poolNet.String())
 
 	buf := make([]byte, 2048)
 	for {
@@ -101,6 +102,36 @@ func startNdpResponder() {
 			return
 		}
 		handleNdPacket(buf[:n], from)
+	}
+}
+
+// parsePoolNet 解析池前缀 CIDR（如 2409:8a1e:2e93:4fe0::/64）
+func parsePoolNet(cidr string) (*net.IPNet, error) {
+	_, poolNet, err := net.ParseCIDR(cidr)
+	if err != nil {
+		return nil, err
+	}
+	return poolNet, nil
+}
+
+// updateNdpPool 前缀变化时就地更新代答段：socket 与网卡绑定都不变，代答器继续工作。
+// 不更新的话，换前缀后回程 NS 全落在新前缀里，代答器会因「不在旧池段」而全部忽略，
+// 表现同样是大面积 i/o timeout。
+func updateNdpPool(cidr string) {
+	if cidr == "" {
+		return
+	}
+	poolNet, err := parsePoolNet(cidr)
+	if err != nil {
+		log.Printf("NDP 代答：池前缀 %s 无效: %v", cidr, err)
+		return
+	}
+	ndpState.Lock()
+	before := ndpState.pool
+	ndpState.pool = poolNet
+	ndpState.Unlock()
+	if before == nil || before.String() != poolNet.String() {
+		log.Printf("NDP 代答段更新为 %s", poolNet.String())
 	}
 }
 
@@ -134,13 +165,13 @@ func handleNdPacket(frame []byte, from syscall.Sockaddr) {
 	}
 
 	ndpState.Lock()
-	pool := ndpState.pool
+	poolNet := ndpState.pool
 	hardware := ndpState.hardware
 	fd := ndpState.fd
 	ifindex := ndpState.ifindex
 	ndpState.Unlock()
 
-	if pool == nil || !pool.Contains(target) {
+	if poolNet == nil || !poolNet.Contains(target) {
 		return
 	}
 
