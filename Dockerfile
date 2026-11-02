@@ -1,8 +1,16 @@
 # ---------- 构建阶段：只在构建层里编译，最终镜像不包含 Go 工具链 ----------
-# 用 alpine 版构建层：只有 musl + Go 工具链，OS 包面最小（扫描器报的漏洞基本都来自
-# 构建层的 Debian 包，而这一层不会进入最终镜像）；产物是 CGO_ENABLED=0 的静态二进制，
-# 换成 musl 构建不影响在 debian 运行阶段执行。
-FROM golang:1.27.3-alpine AS builder
+# 用 alpine 版构建层：只有 musl + Go 工具链，包面比 debian 小，且这一层不会进入最终镜像；
+# 产物是 CGO_ENABLED=0 的静态二进制，所以运行阶段也直接用 alpine（musl 对 musl，无 libc 兼容问题）。
+#
+# 基础镜像一律用移动 tag（不写死大版本/patch）：
+#   - 构建层用 golang:alpine 而不是 golang:latest：两者当前都是 go1.27.3，但 golang:latest
+#     是 Debian 味（bookworm）的，会把一整层 Debian 包带进构建阶段，而扫描器是**逐个 FROM**
+#     上报 CVE 的，白白多出一堆基线漏洞；golang:alpine 拿到的是同样最新的 Go + 最新 alpine，
+#     包面最小。
+#   - go.mod 要求 go >= 1.27.3，移动 tag 只会往前进，不会低于该版本。
+#   - 跨大版本升级会随 tag 自动发生，构建时即可暴露；行为敏感的地方（如 iproute2 输出格式）
+#     由构建后冒烟 + 上线前实跑把关。
+FROM golang:alpine AS builder
 
 # 国内环境加速拉依赖；海外机器可 --build-arg GOPROXY=https://proxy.golang.org,direct
 ARG GOPROXY=https://goproxy.cn,direct
@@ -25,35 +33,49 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     go build -trimpath -ldflags="-s -w" -o /out/go-proxy-ipv6-pool .
 
 # ---------- 运行阶段：只有静态二进制 + 运行时依赖 ----------
-FROM debian:bookworm-slim
-
-ENV TZ=Asia/Shanghai \
-    DEBIAN_FRONTEND=noninteractive
-
 # 运行时依赖：
-#   ndppd    -> IPv6 NDP 代理（程序会写 /etc/ndppd.conf 并执行 service ndppd restart）
-#   iproute2 -> 程序执行的 ip route / ip addr / ip neigh 命令
-#   procps   -> 程序执行的 sysctl 命令
+#   iproute2      -> 程序执行的 ip route / ip addr / ip neigh 命令
+#   procps-ng     -> 程序执行的 sysctl，以及启动时 pkill -x ndppd（清掉可能残留的 ndppd）
 #   ca-certificates/tzdata -> 出站 HTTPS 与本地时区
 #
+# 注意：不再安装 ndppd。NDP 应答已由内置代答器实现（ndp_responder.go：AF_PACKET 抓 NS、
+# 回带 override 的 NA，ndppd 回的 NA 没有 override，CPE 不采纳），main.go 启动时反而会
+# pkill 掉 ndppd；镜像里留着它只是多一个常驻/可执行的攻击面。若要用回旧方案，
+# 把 ndppd 加回下面的 add 列表即可（alpine 源里没有 ndppd，得回到 debian 基线）。
+#
 # 安全基线：
-#   - 先 `apt-get upgrade`：slim 镜像自带的包版本往往落后于 bookworm-security，
-#     构建时打上安全补丁，避免扫描器报出几十个已知 CVE（关键是别让旧包留在运行镜像里）；
-#   - 删掉 apt 缓存、软件包列表、文档与 man，减少镜像体积与可探测面；
-#   - 基础镜像建议始终用 `docker build --pull` / CI 定期重建，才能持续吃到上游补丁。
-RUN apt-get update \
-    && apt-get -y upgrade \
-    && apt-get install -y --no-install-recommends \
-        ndppd \
+#   - 基线用 alpine:latest（移动 tag，跨大版本自动跟进）：运行阶段只要 4 个小包，
+#     包面比 debian-slim 小一个数量级，基线镜像自身的 CVE 也随之少。
+#     产物是 CGO_ENABLED=0 静态二进制，musl 运行没有任何问题；
+#   - `apk upgrade` 先把基线自带包的补丁打齐，避免旧版本包留在运行镜像里；
+#   - `--no-cache` + 删 /var/cache/apk：不把包索引和缓存留在层里；
+#   - 移动 tag 意味着跨大版本（3.24 → 3.25 …）会随重建自动发生：下面的镜像替换只改主机名，
+#     新版 alpine 的 /etc/apk/repositories 结构不变，不用跟着改；
+#     升级后跑一次构建 + 冒烟（ip/sysctl/pkill + 二进制起监听）即可确认没被行为变更伤到。
+FROM alpine:latest
+
+ENV TZ=Asia/Shanghai
+
+# apk 源：默认换成国内镜像（alpine 官方 CDN 在国内经常几十 KB/s）。
+#   - /etc/apk/repositories 里是 dl-cdn.alpinelinux.org 的 main/community 两行，
+#     只替换主机名即可一次覆盖；
+#   - alpine 自带 ca-certificates-bundle，所以保持 https 没问题；
+#   - 海外机器用 --build-arg APK_MIRROR=dl-cdn.alpinelinux.org 还原官方源，传空值则不动。
+ARG APK_MIRROR=mirrors.aliyun.com
+
+RUN set -eux; \
+    if [ -n "${APK_MIRROR}" ]; then \
+        sed -i "s|dl-cdn.alpinelinux.org|${APK_MIRROR}|g" /etc/apk/repositories; \
+    fi; \
+    apk upgrade --no-cache \
+    && apk add --no-cache \
         iproute2 \
-        procps \
+        procps-ng \
         ca-certificates \
         tzdata \
-    && ln -snf /usr/share/zoneinfo/$TZ /etc/localtime \
-    && echo "$TZ" > /etc/timezone \
-    && apt-get -y clean \
-    && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*.deb \
-        /usr/share/doc/* /usr/share/man/*
+    && ln -snf /usr/share/zoneinfo/${TZ} /etc/localtime \
+    && echo "${TZ}" > /etc/timezone \
+    && rm -rf /var/cache/apk/*
 
 WORKDIR /app
 
