@@ -75,8 +75,8 @@ func main() {
 	ensureNonLocalBind()
 	// 随机出口地址不在网卡上，回程 NS 必须由内核代答（proxy_ndp），CPE 才认（见 proxy_ndp.go）
 	ensureProxyNdp()
-	// 清掉上次运行遗留的代理邻居条目（必须在开始接请求之前做，否则会误删在用的条目）
-	cleanupProxyNeighbors()
+	// 接管上次运行遗留的代理邻居条目（必须在开始接请求之前做，交给 TTL 回收而不是逐条删）
+	adoptProxyNeighbors()
 	// 回程包的 NS 由内置 NDP 代答器应答（NA 带 override，CPE 才采纳）。
 	// ndppd 回的 NA 没有 override，实测 CPE 不采纳，这里直接停掉它，避免双应答干扰。
 	if _, err := runCmd("pkill", "-x", "ndppd"); err == nil {

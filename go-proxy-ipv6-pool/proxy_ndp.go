@@ -1,10 +1,12 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net"
 	"os"
+	"os/exec"
 	"sort"
 	"strings"
 	"sync"
@@ -141,10 +143,12 @@ func startProxyNeighborReaper() {
 	}
 }
 
-// cleanupProxyNeighbors 启动时清掉上一次运行残留的代理邻居条目。
-// 条目在内核 neigh 表里是永久的，进程重启不会回收，留着只会越堆越多；
-// 本程序是这些条目的唯一写入方（同机只跑一个实例），所以启动时整表清空是安全的。
-func cleanupProxyNeighbors() {
+// adoptProxyNeighbors 启动时把上一次运行留在内核 neigh 表里的代理条目接管进来。
+// 条目在 neigh 表里是永久的，进程重启不会回收；逐条删在高频运行时会有几千条，
+// 启动被拖住好几秒，所以改成「接管 + 交给正常 TTL 回收」：
+// 时间戳记为当下，由 reaper 按 TTL 分批（ip -batch，一次 exec 删一批）清掉。
+// 本程序是这些条目的唯一写入方（同机只跑一个实例），直接接管不会误伤别人。
+func adoptProxyNeighbors() {
 	if !proxyNdpEnabled() || netIf == "" {
 		return
 	}
@@ -152,22 +156,53 @@ func cleanupProxyNeighbors() {
 	if err != nil {
 		return
 	}
-	removed := 0
+	now := time.Now()
+	adopted := 0
+	proxyNdp.mu.Lock()
 	for _, line := range strings.Split(out, "\n") {
 		fields := strings.Fields(line)
-		if len(fields) == 0 {
+		if len(fields) == 0 || net.ParseIP(fields[0]) == nil {
 			continue
 		}
-		if net.ParseIP(fields[0]) == nil {
+		if _, ok := proxyNdp.entries[fields[0]]; ok {
 			continue
 		}
-		if _, err := runCmd("ip", "-6", "neigh", "del", "proxy", fields[0], "dev", netIf); err == nil {
-			removed++
-		}
+		proxyNdp.entries[fields[0]] = now
+		adopted++
 	}
-	if removed > 0 {
-		log.Printf("proxy_ndp 残留清理：删除上次运行遗留的 %d 条代理邻居", removed)
+	proxyNdp.mu.Unlock()
+	if adopted > 0 {
+		log.Printf("proxy_ndp 残留接管：上次运行遗留的 %d 条代理邻居，交由 TTL 回收", adopted)
 	}
+}
+
+// runCmdInput 带 stdin 执行命令（批量删除靠 `ip -batch -` 一次收完，避免逐条 exec）
+func runCmdInput(input string, name string, args ...string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	c := exec.CommandContext(ctx, name, args...)
+	c.Stdin = strings.NewReader(input)
+	out, err := c.CombinedOutput()
+	if err != nil {
+		log.Printf("命令 %s %v 执行失败: %v，输出：%s", name, args, err, strings.TrimSpace(string(out)))
+	}
+	return err
+}
+
+// deleteProxyNeighbors 批量删除代理邻居条目：`ip -batch -` 一次进程搞定几百条。
+func deleteProxyNeighbors(ips []string) {
+	if len(ips) == 0 || netIf == "" {
+		return
+	}
+	var b strings.Builder
+	for _, ip := range ips {
+		b.WriteString("neigh del proxy ")
+		b.WriteString(ip)
+		b.WriteString(" dev ")
+		b.WriteString(netIf)
+		b.WriteString("\n")
+	}
+	_ = runCmdInput(b.String(), "ip", "-batch", "-")
 }
 
 // pruneProxyNeighbors 删掉超过 TTL 的条目，并按上限淘汰最旧的条目。
@@ -218,12 +253,7 @@ func pruneProxyNeighbors(now time.Time) {
 	}
 	proxyNdp.mu.Unlock()
 
-	for _, ip := range expired {
-		_, _ = runCmd("ip", "-6", "neigh", "del", "proxy", ip, "dev", netIf)
-	}
-	for _, ip := range oldest {
-		_, _ = runCmd("ip", "-6", "neigh", "del", "proxy", ip, "dev", netIf)
-	}
+	deleteProxyNeighbors(append(expired, oldest...))
 	if len(expired)+len(oldest) > 0 {
 		log.Printf("proxy_ndp 条目清理：过期 %d 条，超限淘汰 %d 条", len(expired), len(oldest))
 	}

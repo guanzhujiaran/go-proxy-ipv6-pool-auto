@@ -31,3 +31,6 @@ go.work
 
 # Python 诊断脚本缓存
 __pycache__/
+
+# 子包目录里 `go build` 的默认产物（与目录同名），不纳入版本管理
+/go-proxy-ipv6-pool/go-proxy-ipv6-pool
