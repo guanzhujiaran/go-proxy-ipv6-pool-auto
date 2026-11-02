@@ -5,7 +5,9 @@ services:
     # ndppd 与随机源地址绑定都要求看到宿主机真实网卡，不能走 bridge
     network_mode: host
     environment:
-      - NET_IF=${NET_IF:-eth0}
+      # 网卡名从 .env 读取（每台机器不同：eth0 / enp2s0 / ens18 …，不能写死）；
+      # 留空时代理进程会扫描所有网卡找公网 IPv6。
+      - NET_IF=${NET_IF:-}
       - RUN_ENV=prod
       # 拨号：坏出口早放弃早换（每个请求都用全新的随机地址，失败就换下一个）
       # - DIAL_TIMEOUT_SECONDS=5    # 单个出口拨号超时

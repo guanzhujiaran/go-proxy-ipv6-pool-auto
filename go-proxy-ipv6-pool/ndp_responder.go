@@ -39,9 +39,10 @@ var ndpState struct {
 	pool     *net.IPNet
 }
 
-// startNdpResponderWhenReady 等池前缀确定后启动代答器（前缀由 ipv6Monitor 首轮获取）
+// startNdpResponderWhenReady 等池前缀与网卡都确定后启动代答器
+// （前缀由 ipv6Monitor 首轮获取，网卡由 resolveNetIf 探测，宿主刚开机时两者都可能还没就绪）
 func startNdpResponderWhenReady() {
-	for i := 0; i < 60 && cidr == ""; i++ {
+	for i := 0; i < 60 && (cidr == "" || netIf == ""); i++ {
 		time.Sleep(time.Second)
 	}
 	startNdpResponder()

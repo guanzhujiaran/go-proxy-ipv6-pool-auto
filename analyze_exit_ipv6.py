@@ -105,6 +105,18 @@ def check_nonlocal_bind() -> bool:
         return False
 
 
+def detect_iface() -> str:
+    """按默认 IPv6 路由推断出口网卡（每台机器网卡名不同，不能假设 eth0）。"""
+    out = run(["ip", "-6", "route", "show", "default"]).stdout
+    for line in out.splitlines():
+        parts = line.split()
+        if "dev" in parts:
+            idx = parts.index("dev")
+            if idx + 1 < len(parts):
+                return parts[idx + 1]
+    return ""
+
+
 def detect_prefix(iface: str) -> tuple[str, ipaddress.IPv6Network]:
     """取网卡上的公网 IPv6，推导池前缀（与 go 程序逻辑一致：排除 fe80 与 ULA）。"""
     out = run(["ip", "-6", "addr", "show", "dev", iface]).stdout
@@ -505,7 +517,12 @@ def write_csv(path: str, report: Report) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="随机 IPv6 出口抽样：找出成功/失败地址的规律")
-    parser.add_argument("-i", "--iface", default=os.getenv("NET_IF", "eth0"), help="网卡名（默认 eth0）")
+    parser.add_argument(
+        "-i",
+        "--iface",
+        default=os.getenv("NET_IF"),
+        help="网卡名（默认取 .env / 环境变量 NET_IF，都没配时按默认 IPv6 路由推断）",
+    )
     parser.add_argument("-n", "--count", type=int, default=20, help="随机地址样本数（默认 20）")
     parser.add_argument("-c", "--pings", type=int, default=2, help="每个地址发几个包（默认 2）")
     parser.add_argument("-W", "--wait", type=int, default=4, help="每包等待秒数（默认 4，链路 rtt 峰值可能 >3s）")
@@ -530,6 +547,11 @@ def main() -> None:
     )
     parser.set_defaults(capture=None)
     args = parser.parse_args()
+
+    if not args.iface:
+        args.iface = detect_iface()
+    if not args.iface:
+        raise SystemExit("确定不了网卡：请用 -i 指定，或在 .env / 环境变量里设置 NET_IF")
 
     if not shutil.which("ping"):
         raise SystemExit("找不到 ping 命令")

@@ -112,6 +112,10 @@ func matchIPv6OnInterface(iface net.Interface, match func(net.IP) bool) (string,
 
 func ipv6Monitor() {
 	for {
+		// 启动时宿主可能还没有公网 IPv6（RA/DHCPv6 未就绪），网卡探测不出来；每轮重试一次
+		if netIf == "" {
+			netIf = resolveNetIf()
+		}
 		currentIpv6, err := getLocalIPv6()
 		if err != nil {
 			log.Println("获取 IPv6 地址失败:", err)

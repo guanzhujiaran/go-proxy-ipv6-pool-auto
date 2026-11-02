@@ -35,7 +35,8 @@ func main() {
 	if err != nil {
 		log.Fatalf("Error loading .env file: %v", err)
 	}
-	netIf = os.Getenv("NET_IF")
+	// 网卡名不写死：NET_IF 只是可选覆盖，没填或填了本机没有的网卡时由程序自己探测（见 iface.go）
+	netIf = resolveNetIf()
 	runEnv = os.Getenv("RUN_ENV")
 	// 拨号参数从环境变量读取（.env 已在上面加载）
 	initDialTuning()

@@ -72,7 +72,8 @@ sudo ./bin/go-proxy-ipv6-pool --port 3128 --prefix 64   # 需要 root：改路�
 
 ```bash
 cd go-proxy-ipv6-pool-auto/go-proxy-ipv6-pool
-printf 'NET_IF=eth0\nRUN_ENV=prod\n' > .env          # 启动时会 godotenv.Load(".env")，缺了直接退出
+printf 'NET_IF=%s\nRUN_ENV=prod\n' "$(ip -6 route show default | awk '{for(i=1;i<NF;i++) if ($i=="dev"){print $(i+1); exit}}')" > .env
+# ↑ 启动时会 godotenv.Load(".env")，缺了直接退出；NET_IF 必须按本机网卡名填（eth0 / enp2s0 / ens18 …）
 go build -o go-proxy-ipv6-pool .
 sudo ./go-proxy-ipv6-pool --port 3128 --prefix 64    # 需要 root：改路由 + 起 ndppd
 ```
@@ -105,7 +106,7 @@ curl -x socks5h://<host>:3129 https://v6.mypublicipnow.com/  # SOCKS5 代理
 
 | 配置 | 说明 |
 | --- | --- |
-| `NET_IF`（环境变量 / `.env`） | 用于推断池前缀的网卡，默认 `eth0` |
+| `NET_IF`（环境变量 / `.env`，可选） | 用于推断池前缀的网卡。**一般不填**：程序自己判断（默认 IPv6 路由 → 带公网 IPv6 的物理网卡 → 默认 IPv4 路由，排除 lo/docker/br-/veth 等虚拟网卡），启动日志打印「自动探测到出口网卡：xxx」。多块物理网卡想固定走某一块时才填，查法：`ip -6 route show default` 里 `dev` 后面的名字 |
 | `--port` | HTTP 代理端口，SOCKS5 自动用 `端口+1`，默认 `3128` |
 | `--prefix` | 前缀长度，默认 `64` |
 | `DIAL_TIMEOUT_SECONDS` | 单个随机出口的拨号超时，默认 `5`（坏出口直接换，不必长等） |
