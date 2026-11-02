@@ -23,7 +23,7 @@ func init() {
 			if err != nil {
 				return nil, err
 			}
-			log.Println("[socks5]", addr, "via", outgoingIP)
+			debugLog("[socks5] %s via %s", addr, outgoingIP)
 			return conn, nil
 		},
 	}

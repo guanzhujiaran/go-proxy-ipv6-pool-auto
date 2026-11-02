@@ -140,3 +140,4 @@ curl -x socks5h://<host>:3129 https://v6.mypublicipnow.com/  # SOCKS5 代理
 | `DIAL_TIMEOUT_SECONDS` | 单个随机出口的拨号超时，默认 `5`（坏出口直接换，不必长等） |
 | `DIAL_MAX_ATTEMPTS` | 单次请求最多尝试的随机出口数量，默认 `5` |
 | `POOL_CHECK_INTERVAL` | 池前缀复查间隔（秒），默认 `300`；拨号全部失败时还会额外触发一次即时复查（10s 冷却） |
+| `RUN_ENV` / `DEBUG` | 日志级别。默认（`RUN_ENV=prod`）不打印每请求日志；`RUN_ENV=dev` 或 `DEBUG=true` 时打印每条 HTTP/CONNECT/SOCKS5 请求及每个随机出口的拨号明细，排障用 |

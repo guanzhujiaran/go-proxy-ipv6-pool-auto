@@ -13,12 +13,14 @@ import (
 
 var httpProxy = goproxy.NewProxyHttpServer()
 
+// configureProxyVerbose 按 debug 模式开关 goproxy 内置的请求/响应日志。
+// 由 main 在加载 .env 之后调用：init() 阶段 runEnv 还是空串。
+func configureProxyVerbose() {
+	httpProxy.Verbose = debugEnabled
+}
+
 func init() {
-	if runEnv == "dev" {
-		httpProxy.Verbose = true
-	} else {
-		httpProxy.Verbose = false
-	}
+	httpProxy.Verbose = false
 
 	httpProxy.OnRequest().DoFunc(
 		func(req *http.Request, ctx *goproxy.ProxyCtx) (*http.Request, *http.Response) {
@@ -47,8 +49,8 @@ func init() {
 							return nil, err
 						}
 						// 记录实际连上的对端 IP 与拨号耗时，便于和失败日志的目标 IP 对比，
-						// 区分「出口地址不可用」还是「目标节点不可达」
-						log.Printf("[http] %s %s via %s -> %s, dial in %s", req.Method, req.URL.String(),
+						// 区分「出口地址不可用」还是「目标节点不可达」；每请求都会打印，仅 debug 模式输出
+						debugLog("[http] %s %s via %s -> %s, dial in %s", req.Method, req.URL.String(),
 							outgoingIP, conn.RemoteAddr(), time.Since(start).Round(time.Millisecond))
 						return conn, nil
 					},
@@ -77,7 +79,7 @@ func init() {
 				client.Close()
 				return
 			}
-			log.Printf("[http] CONNECT %s via %s -> %s", req.URL.Host, outgoingIP, server.RemoteAddr())
+			debugLog("[http] CONNECT %s via %s -> %s", req.URL.Host, outgoingIP, server.RemoteAddr())
 
 			// 响应客户端连接已建立
 			client.Write([]byte("HTTP/1.0 200 OK\r\n\r\n"))

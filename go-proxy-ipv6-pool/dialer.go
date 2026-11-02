@@ -88,7 +88,8 @@ func dialWithRandomIPv6(ctx context.Context, tag, network, addr string) (net.Con
 		}
 
 		lastErr = err
-		log.Printf("%s dial %s via %s failed in %s (%d/%d): %v",
+		// 单个随机出口失败是常态（换下一个即可），只在 debug 模式逐条打印
+		debugLog("%s dial %s via %s failed in %s (%d/%d): %v",
 			tag, addr, outgoingIP, time.Since(start).Round(time.Millisecond), attempt, dialMaxAttempts, err)
 	}
 	log.Printf("%s dial %s failed, all %d random exits exhausted", tag, addr, dialMaxAttempts)

@@ -57,6 +57,19 @@ func (p *poolState) Addr() string {
 // runEnv 表示运行环境，可选值为 "prod" 或 "dev"
 var runEnv string
 
+// debugEnabled 控制每请求级别的日志（成功拨号、每条 CONNECT 等）。
+// 代理在生产环境每秒可能处理大量请求，这些日志默认关闭；
+// RUN_ENV=dev 或 DEBUG=true 时才打印，排障时按需打开。
+var debugEnabled bool
+
+// debugLog 仅在 debug 模式下打印，用于每请求都会触发的详细日志
+func debugLog(format string, args ...any) {
+	if !debugEnabled {
+		return
+	}
+	log.Printf(format, args...)
+}
+
 func main() {
 	flag.IntVar(&prefixLen, "prefix", 64, "ipv6 prefix length")
 	flag.IntVar(&port, "port", 3128, "server port")
@@ -68,6 +81,9 @@ func main() {
 	// 网卡名不写死：NET_IF 只是可选覆盖，没填或填了本机没有的网卡时由程序自己探测（见 iface.go）
 	netIf = resolveNetIf()
 	runEnv = os.Getenv("RUN_ENV")
+	// debug 模式打开每请求日志；必须在这里读取，init() 阶段 .env 还没加载
+	debugEnabled = runEnv == "dev" || strings.EqualFold(os.Getenv("DEBUG"), "true")
+	configureProxyVerbose()
 	// 拨号参数从环境变量读取（.env 已在上面加载）
 	initDialTuning()
 	// 随机 IPv6 出口是本机网卡上不存在的地址，内核必须允许 bind 非本机地址；

@@ -9,6 +9,8 @@ services:
       # 留空时代理进程会扫描所有网卡找公网 IPv6。
       - NET_IF=${NET_IF:-}
       - RUN_ENV=prod
+      # 日志：默认只打印启动/异常/池前缀变化；排障时打开 DEBUG 才会输出每请求日志
+      # - DEBUG=true
       # 拨号：坏出口早放弃早换（每个请求都用全新的随机地址，失败就换下一个）
       # - DIAL_TIMEOUT_SECONDS=5    # 单个出口拨号超时
       # - DIAL_MAX_ATTEMPTS=5       # 单次请求最多换几个随机出口
