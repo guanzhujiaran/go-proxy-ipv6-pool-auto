@@ -51,6 +51,22 @@ ndppd 与内核 `proxy_ndp` 只在地址挂不上时作为兜底。
 - 拨号全部失败时立刻触发一次复查（10s 冷却），不用等满一个周期；
 - 切换后同步改写 local 路由、删掉旧前缀路由、更新 NDP 代答段，无需重启进程。
 
+### 回程 NS 必须由内核代答（proxy_ndp）
+
+随机出口地址不在网卡上，CPE（光猫）回程前要 `NS` 解析它；**谁来应答**决定了通不通。同一台光猫、同一前缀下实测：
+
+| 方案 | 结果 |
+| --- | --- |
+| 用户态代答（ndppd / 内置代答器，NA 带 solicited+override） | CPE 不采纳，NS 反复重发，dial 几乎 100% `i/o timeout` |
+| `ip -6 addr add` 到网卡 | 通（约 1.1s），但 netlink **地址事件**会让 Chromium 判定网络变更 → `ERR_NETWORK_CHANGED` |
+| 内核 `proxy_ndp`（当前方案） | 通（冷地址 0.6s 建连），只写 **neigh 表**、无地址事件 → 浏览器无感 |
+
+因此：启动时把 `net.ipv6.conf.<网卡>.proxy_ndp` 置 1，拨号前对出口地址执行
+`ip -6 neigh add proxy <出口地址> dev <网卡>`，请求结束不立即删（CPE 邻居缓存过期后还会重新
+`NS`），由后台按 TTL/上限回收；进程重启时清掉上次遗留的代理邻居条目。
+
+宿主机侧若要预先配置：`sudo sysctl -w net.ipv6.conf.<网卡>.proxy_ndp=1`。
+
 ## 启动方式
 
 ### Docker（host 网络，推荐）

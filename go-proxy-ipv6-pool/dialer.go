@@ -48,9 +48,9 @@ func dialWithRandomIPv6(ctx context.Context, tag, network, addr string) (net.Con
 
 	var lastErr error
 	for attempt := 1; attempt <= dialMaxAttempts; attempt++ {
-		// 每个请求用一个全新的随机地址作为源地址，只 bind、不改网卡：
-		// 网络配置在启动/前缀变化时已配好（local 路由 + NDP 代答），
-		// 请求期间不产生任何 netlink 地址事件，避免浏览器的 network-change 检测。
+		// 每个请求用一个全新的随机地址作为源地址，只 bind、不改网卡地址：
+		// 网络配置在启动/前缀变化时已配好（local 路由 + proxy_ndp），
+		// 请求期间只写内核 neigh 表（没有地址事件），避免浏览器的 network-change 检测。
 		poolCidr := pool.CIDR()
 		if poolCidr == "" {
 			// 池前缀还没就绪（宿主刚开机 / 光猫刚重启），没有源地址可用
@@ -64,6 +64,10 @@ func dialWithRandomIPv6(ctx context.Context, tag, network, addr string) (net.Con
 			return nil, "", err
 		}
 		outgoingIP := "[" + randomIP + "]"
+
+		// 该随机地址不在网卡上，CPE 回程前要先解析它：必须让内核替它代答 NS，
+		// 否则 NS 无人应答，CPE 一直 INCOMPLETE，dial 必然 i/o timeout（见 proxy_ndp.go）。
+		proxyNeighborAdd(randomIP)
 
 		localAddr, err := net.ResolveTCPAddr("tcp", outgoingIP+":0")
 		if err != nil {
