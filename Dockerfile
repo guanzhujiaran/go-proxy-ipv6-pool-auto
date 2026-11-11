@@ -67,6 +67,16 @@ ARG APT_MIRROR=mirrors.aliyun.com
 
 # apt 索引与 deb 包都走 cache mount：反复重建镜像时不再每次重新下载包索引（这是之前构建慢的主因）。
 # 注意：用 cache mount 后不要再 `rm -rf /var/lib/apt/lists/*`，否则缓存被清空、下次照样重下。
+#
+# 末尾的 ndppd 校验**只验证「包装上了、二进制可执行」，绝不真的把守护进程拉起来**。
+# 旧写法 `ndppd -c /dev/null 2>&1 | head -2 || true` 会永久挂住构建：
+#   - ndppd 不带 -d 时在前台常驻，启动只打印一行 notice（Using configuration file '/dev/null'），
+#     之后不再往 stderr 写任何东西；
+#   - 于是 `head -2` 永远等不到第二行（管道不 EOF），ndppd 也收不到 SIGPIPE 继续常驻，
+#     构建卡在那行 notice 上，宿主机 ps 里残留 root 的 `ndppd -c /dev/null`。
+# 这里改成：dpkg/exec 位做硬校验；想确认二进制真能跑就用 `timeout -k 1 5` 包一层，
+# 并且**重定向到文件而不是接管道**（head 读文件不会阻塞），超时由 timeout 兜底 SIGTERM/SIGKILL，
+# 无论 ndppd 行为如何该 RUN 都会在 5s 内结束。
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
     set -eux; \
@@ -84,7 +94,11 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         tzdata; \
     ln -snf /usr/share/zoneinfo/${TZ} /etc/localtime; \
     echo "${TZ}" > /etc/timezone; \
-    ndppd -c /dev/null 2>&1 | head -2 || true
+    dpkg -s ndppd > /dev/null; \
+    command -v ndppd; \
+    timeout -k 1 5 ndppd -c /dev/null > /tmp/ndppd-selftest.log 2>&1 || true; \
+    head -2 /tmp/ndppd-selftest.log || true; \
+    rm -f /tmp/ndppd-selftest.log
 
 WORKDIR /app
 
