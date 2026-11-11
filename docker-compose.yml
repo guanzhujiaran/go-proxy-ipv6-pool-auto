@@ -11,9 +11,20 @@ services:
       - RUN_ENV=prod
       # 日志：默认只打印启动/异常/池前缀变化；排障时打开 DEBUG 才会输出每请求日志
       # - DEBUG=true
-      # 拨号：坏出口早放弃早换（每个请求都用全新的随机地址，失败就换下一个）
+      # 拨号：坏出口早放弃早换（池里/随机取，失败就换下一个）
       # - DIAL_TIMEOUT_SECONDS=5    # 单个出口拨号超时
-      # - DIAL_MAX_ATTEMPTS=5       # 单次请求最多换几个随机出口
+      # - DIAL_MAX_ATTEMPTS=5       # 单次请求最多换几个出口
+      # 回程 NS 代答后端：userspace（默认）= 内置代答器覆盖整段 /64，内核 neigh 表零条目；
+      # kernel = 内核 proxy_ndp，用哪个地址就 add 一条 pneigh（/64 不可能一条条加，只适合小规模）
+      - NDP_BACKEND=${NDP_BACKEND:-ndppd}
+      # userspace 后端把网卡置为 allmulticast：整段代答必须能收到任意 solicited-node 组播组的 NS
+      - NDP_ALLMULTICAST=${NDP_ALLMULTICAST:-on}
+      # 出口地址池：留空 = 按后端取默认（userspace 每请求新地址；kernel 512）
+      - EXIT_POOL_SIZE=${EXIT_POOL_SIZE:-0}
+      # 池内地址轮换周期（秒）：到期换一批新的 /64 随机地址（0 = 不轮换；仅配了池时生效）
+      - EXIT_POOL_RENEW_SECONDS=${EXIT_POOL_RENEW_SECONDS:-600}
+      # kernel 后端下内置代答器的开关：auto = proxy_ndp 可用就不启；on / off 可强制
+      - NDP_RESPONDER=${NDP_RESPONDER:-auto}
     # 直接挂载宿主机编译好的二进制：改完 Go 代码只需 ./build.sh && docker compose restart，
     # 不必重新构建镜像。镜像里仍内置一份，挂载目录里没有二进制时自动回落到内置版本。
     volumes:

@@ -4,6 +4,8 @@ import (
 	"encoding/binary"
 	"log"
 	"net"
+	"os"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -37,6 +39,42 @@ var ndpState struct {
 	ifindex  int
 	hardware net.HardwareAddr
 	pool     *net.IPNet
+}
+
+// ndpResponderAuto 是 NDP_RESPONDER 的默认值：只在 kernel proxy_ndp 没启用时才代答。
+const ndpResponderAuto = "auto"
+
+// startNdpResponderByMode 按 NDP_RESPONDER 决定是否启动内置代答器。
+//
+// 为什么默认不再无条件启动：kernel proxy_ndp 与用户态代答器对同一个 NS **会各自回一条 NA**，
+// 双应答会互相覆盖 CPE 的邻居缓存；而且 AF_PACKET 原始套接字是逐包进用户态的，
+// 几十万条 solicited-node 组播组的 NS 全捞上来处理，纯属白烧 CPU。
+// 所以 auto 只在 proxy_ndp 不可用（容器无写权限、宿主机未开）时才起代答器兜底；
+// 需要强制打开/关闭时用 on / off。
+func startNdpResponderByMode() {
+	mode := strings.ToLower(strings.TrimSpace(os.Getenv("NDP_RESPONDER")))
+	switch mode {
+	case "", ndpResponderAuto:
+		startNdpResponderAuto()
+	case "on", "true", "1", "yes":
+		log.Printf("NDP_RESPONDER=%s：强制启动内置代答器（NA 带 override）", mode)
+		go startNdpResponderWhenReady()
+	case "off", "false", "0", "no":
+		log.Printf("NDP_RESPONDER=off：不启动内置代答器（回程 NS 只由内核 proxy_ndp 代答）")
+	default:
+		log.Printf("NDP_RESPONDER=%q 无法识别（可选 auto/on/off），按 auto 处理", mode)
+		startNdpResponderAuto()
+	}
+}
+
+// startNdpResponderAuto auto 模式：proxy_ndp 已启用就不起用户态代答器
+func startNdpResponderAuto() {
+	if proxyNdpEnabled() {
+		log.Printf("NDP_RESPONDER=auto 且内核 proxy_ndp 已启用：不启动内置代答器（避免双应答与 AF_PACKET 逐包开销）")
+		return
+	}
+	log.Printf("NDP_RESPONDER=auto 但内核 proxy_ndp 未启用：启动内置代答器兜底（NA 带 override）")
+	go startNdpResponderWhenReady()
 }
 
 // startNdpResponderWhenReady 等池前缀与网卡都确定后启动代答器

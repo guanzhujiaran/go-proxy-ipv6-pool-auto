@@ -48,26 +48,26 @@ func dialWithRandomIPv6(ctx context.Context, tag, network, addr string) (net.Con
 
 	var lastErr error
 	for attempt := 1; attempt <= dialMaxAttempts; attempt++ {
-		// 每个请求用一个全新的随机地址作为源地址，只 bind、不改网卡地址：
-		// 网络配置在启动/前缀变化时已配好（local 路由 + proxy_ndp），
-		// 请求期间只写内核 neigh 表（没有地址事件），避免浏览器的 network-change 检测。
+		// 取源地址：默认（NDP_BACKEND=userspace）每个请求都在 /64 内取全新随机地址，
+		// 整段代答不产生内核条目；kernel 后端才会走地址池复用（条目数受池大小限制，见 proxy_ndp.go）。
 		poolCidr := pool.CIDR()
 		if poolCidr == "" {
 			// 池前缀还没就绪（宿主刚开机 / 光猫刚重启），没有源地址可用
 			requestPoolRecheck()
 			return nil, "", fmt.Errorf("pool prefix not ready yet")
 		}
-		randomIP, err := generateRandomIPv6(poolCidr)
+		exitIP, err := pickExitIP(poolCidr)
 		if err != nil {
-			// 生成出口地址失败与出口是否可用无关，重试没有意义
-			log.Printf("%s Generate random IPv6 error: %v", tag, err)
+			// 选不出出口地址与出口是否可用无关，重试没有意义
+			log.Printf("%s pick exit ip error: %v", tag, err)
 			return nil, "", err
 		}
-		outgoingIP := "[" + randomIP + "]"
+		outgoingIP := "[" + exitIP + "]"
 
-		// 该随机地址不在网卡上，CPE 回程前要先解析它：必须让内核替它代答 NS，
+		// 该地址不在网卡上，CPE 回程前要先解析它：必须让内核替它代答 NS，
 		// 否则 NS 无人应答，CPE 一直 INCOMPLETE，dial 必然 i/o timeout（见 proxy_ndp.go）。
-		proxyNeighborAdd(randomIP)
+		// 同一地址在刷新窗口内被复用时不会再 exec `ip`。
+		proxyNeighborAdd(exitIP)
 
 		localAddr, err := net.ResolveTCPAddr("tcp", outgoingIP+":0")
 		if err != nil {
